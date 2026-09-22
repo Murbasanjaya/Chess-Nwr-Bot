@@ -1,0 +1,17 @@
+{
+  "name": "catur-kayu-node",
+  "version": "1.0.0",
+  "description": "Catur Kayu — web catur full Node.js/Express dengan AI catur buatan sendiri (bukan Stockfish), buku 150+ pembukaan, dan mode saran.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "chess.js": "0.10.3"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT"
+}
