@@ -34,6 +34,7 @@ function absoluteEval(g){
   const board = g.board();
   let score = 0;
   const pawnFilesW = [0,0,0,0,0,0,0,0], pawnFilesB = [0,0,0,0,0,0,0,0];
+  const pawnsW = [], pawnsB = []; // {row,col} — dipakai buat cek pion lolos (passed pawn)
   let bishopsW = 0, bishopsB = 0;
   for(let row=0; row<8; row++){
     for(let col=0; col<8; col++){
@@ -43,25 +44,63 @@ function absoluteEval(g){
       const tbl = PST[cell.type];
       if(cell.color === 'w'){
         score += VAL[cell.type] + tbl[idx];
-        if(cell.type === 'p') pawnFilesW[col]++;
+        if(cell.type === 'p'){ pawnFilesW[col]++; pawnsW.push({row,col}); }
         else if(cell.type === 'b') bishopsW++;
       } else {
         const mIdx = (7-row)*8+col;
         score -= VAL[cell.type] + tbl[mIdx];
-        if(cell.type === 'p') pawnFilesB[col]++;
+        if(cell.type === 'p'){ pawnFilesB[col]++; pawnsB.push({row,col}); }
         else if(cell.type === 'b') bishopsB++;
       }
     }
   }
+  // struktur pion: dobel & yatim
   for(let f=0; f<8; f++){
     if(pawnFilesW[f]>1) score -= 16*(pawnFilesW[f]-1);
     if(pawnFilesB[f]>1) score += 16*(pawnFilesB[f]-1);
     if(pawnFilesW[f]>0 && !(f>0&&pawnFilesW[f-1]>0) && !(f<7&&pawnFilesW[f+1]>0)) score -= 12*pawnFilesW[f];
     if(pawnFilesB[f]>0 && !(f>0&&pawnFilesB[f-1]>0) && !(f<7&&pawnFilesB[f+1]>0)) score += 12*pawnFilesB[f];
   }
+  // pion lolos (passed pawn): makin dekat promosi, makin besar bonusnya
+  const PASSED_BONUS = [0,10,20,35,55,80,120,0]; // indeks by "langkah menuju promosi", disesuaikan di bawah
+  for(const p of pawnsW){
+    let blocked = false;
+    for(const e of pawnsB){ if(Math.abs(e.col-p.col)<=1 && e.row < p.row){ blocked = true; break; } }
+    if(!blocked) score += PASSED_BONUS[6-p.row] || 0; // row kecil = makin dekat rank8; buat putih maju row makin kecil
+  }
+  for(const p of pawnsB){
+    let blocked = false;
+    for(const e of pawnsW){ if(Math.abs(e.col-p.col)<=1 && e.row > p.row){ blocked = true; break; } }
+    if(!blocked) score -= PASSED_BONUS[p.row-1] || 0;
+  }
+  // pasangan gajah
   if(bishopsW>=2) score += 30;
   if(bishopsB>=2) score -= 30;
   return score;
+}
+
+function mvvLva(m){
+  // Most Valuable Victim - Least Valuable Attacker: makan bidak mahal pakai bidak murah duluan
+  if(!m.captured) return -1;
+  return 10*pieceValueOf(m.captured) - pieceValueOf(m.piece);
+}
+function sameMove(a,b){ return a && b && a.from===b.from && a.to===b.to && a.promotion===b.promotion; }
+
+function orderMoves(moves, ttMove, killerPair, historyTable){
+  return moves.slice().sort((a,b)=>{
+    const aTT = sameMove(a, ttMove), bTT = sameMove(b, ttMove);
+    if(aTT && !bTT) return -1; if(bTT && !aTT) return 1;
+    const av = mvvLva(a), bv = mvvLva(b);
+    if(av !== bv) return bv - av; // capture, urut MVV-LVA (non-capture selalu -1, jadi capture apapun didahulukan)
+    if(av === -1){ // sama-sama non-capture: cek killer move lalu history heuristic
+      const aK = killerPair && (sameMove(a,killerPair[0]) || sameMove(a,killerPair[1]));
+      const bK = killerPair && (sameMove(b,killerPair[0]) || sameMove(b,killerPair[1]));
+      if(aK && !bK) return -1; if(bK && !aK) return 1;
+      const ah = (historyTable[a.from+a.to]||0), bh = (historyTable[b.from+b.to]||0);
+      return bh - ah;
+    }
+    return 0;
+  });
 }
 
 // ---------------- search: quiescence + negamax + alpha-beta, time-boxed ----------------
@@ -76,16 +115,20 @@ function timeUp(deadline){
 function quiescence(g, alpha, beta, deadline, qLeft){
   timeUp(deadline);
   if(g.in_checkmate()) return -100000;
-  const standPat = (g.turn()==='w'?1:-1) * absoluteEval(g);
-  if(standPat >= beta) return beta;
-  if(alpha < standPat) alpha = standPat;
-  if(qLeft <= 0) return alpha;
-  let moves = g.moves({verbose:true}).filter(m => m.captured || m.flags.indexOf('p')!==-1);
-  moves.sort((a,b)=>{ const av=a.captured?pieceValueOf(a.captured):0; const bv=b.captured?pieceValueOf(b.captured):0; return bv-av; });
+  const inCheck = g.in_check();
+  if(!inCheck){
+    const standPat = (g.turn()==='w'?1:-1) * absoluteEval(g);
+    if(standPat >= beta) return beta;
+    if(alpha < standPat) alpha = standPat;
+    if(qLeft <= 0) return alpha;
+  }
+  // kalau lagi diskak, semua langkah legal wajib dipertimbangkan (nggak ada opsi "diam saja")
+  let moves = inCheck ? g.moves({verbose:true}) : g.moves({verbose:true}).filter(m => m.captured || m.flags.indexOf('p')!==-1);
+  moves.sort((a,b)=> mvvLva(b) - mvvLva(a));
   for(const m of moves){
     g.move(m);
     let score;
-    try{ score = -quiescence(g, -beta, -alpha, deadline, qLeft-1); }
+    try{ score = -quiescence(g, -beta, -alpha, deadline, inCheck?qLeft:qLeft-1); }
     catch(e){ g.undo(); throw e; }
     g.undo();
     if(score >= beta) return beta;
@@ -94,50 +137,75 @@ function quiescence(g, alpha, beta, deadline, qLeft){
   return alpha;
 }
 
-function negamax(g, depth, alpha, beta, deadline){
+function negamax(g, depth, alpha, beta, deadline, killers, historyTable, tt, ext){
   if(g.in_checkmate()) return -100000 - depth;
   if(g.in_draw() || g.in_stalemate() || g.in_threefold_repetition()) return 0;
-  if(depth === 0) return quiescence(g, alpha, beta, deadline, 4);
+
+  // check extension: kalau lagi diskak, jangan hitung ply ini sebagai "biaya" — cari lebih dalam
+  // biar nggak kelewat rangkaian skak/paksaan, dibatasi budget ext biar aman dari rantai tak terbatas.
+  let d = depth;
+  let extended = false;
+  if(g.in_check() && ext > 0){ d = depth + 1; extended = true; }
+  if(d === 0) return quiescence(g, alpha, beta, deadline, 4);
   timeUp(deadline);
-  let moves = g.moves({verbose:true});
-  moves.sort((a,b)=>{ const av=a.captured?pieceValueOf(a.captured):0; const bv=b.captured?pieceValueOf(b.captured):0; return bv-av; });
-  let best = -Infinity;
+
+  const key = g.fen();
+  const origAlpha = alpha;
+  let ttEntry = tt.get(key);
+  if(ttEntry && ttEntry.depth >= d){
+    if(ttEntry.flag === 'EXACT') return ttEntry.score;
+    if(ttEntry.flag === 'LOWER' && ttEntry.score >= beta) return ttEntry.score;
+    if(ttEntry.flag === 'UPPER' && ttEntry.score <= alpha) return ttEntry.score;
+  }
+  const ttMove = ttEntry ? ttEntry.bestMove : null;
+
+  const killerPair = killers[d] || (killers[d] = [null,null]);
+  let moves = orderMoves(g.moves({verbose:true}), ttMove, killerPair, historyTable);
+  let best = -Infinity, bestMove = null;
+  const childExt = extended ? ext - 1 : ext;
   for(const m of moves){
     g.move(m);
     let score;
-    try{ score = -negamax(g, depth-1, -beta, -alpha, deadline); }
+    try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
     catch(e){ g.undo(); throw e; }
     g.undo();
-    if(score > best) best = score;
+    if(score > best){ best = score; bestMove = m; }
     if(best > alpha) alpha = best;
-    if(alpha >= beta) break;
+    if(alpha >= beta){
+      if(!m.captured){
+        if(!sameMove(m, killerPair[0])){ killerPair[1] = killerPair[0]; killerPair[0] = m; }
+        historyTable[m.from+m.to] = (historyTable[m.from+m.to]||0) + d*d;
+      }
+      break;
+    }
   }
+  let flag = 'EXACT';
+  if(best <= origAlpha) flag = 'UPPER';
+  else if(best >= beta) flag = 'LOWER';
+  tt.set(key, { depth: d, score: best, flag, bestMove });
   return best;
 }
 
 // Iterative deepening bounded by wall-clock time. Runs fully synchronously —
 // on the server this is fine, it doesn't freeze anyone's browser; only this
 // one HTTP request waits on it.
+const CHECK_EXT_BUDGET = 6;
 function findBestMoves(fen, maxDepth, budgetMs){
   const deadline = Date.now() + budgetMs;
   const g = new Chess(fen);
+  const tt = new Map();
+  const killers = [];
+  const historyTable = {};
   let overallBest = null, pv = null, depth = 1;
   while(depth <= maxDepth && Date.now() < deadline){
-    const rootMoves = g.moves({verbose:true});
+    const rootMoves = orderMoves(g.moves({verbose:true}), pv, killers[depth]||[null,null], historyTable);
     if(rootMoves.length === 0) break;
-    rootMoves.sort((a,b)=>{
-      const aPV = pv && a.from===pv.from && a.to===pv.to && a.promotion===pv.promotion;
-      const bPV = pv && b.from===pv.from && b.to===pv.to && b.promotion===pv.promotion;
-      if(aPV && !bPV) return -1; if(bPV && !aPV) return 1;
-      const av=a.captured?pieceValueOf(a.captured):0, bv=b.captured?pieceValueOf(b.captured):0;
-      return bv-av;
-    });
     const scored = [];
     let aborted = false;
     for(const m of rootMoves){
       g.move(m);
       let s;
-      try{ s = -negamax(g, depth-1, -Infinity, Infinity, deadline); }
+      try{ s = -negamax(g, depth-1, -Infinity, Infinity, deadline, killers, historyTable, tt, CHECK_EXT_BUDGET); }
       catch(e){
         g.undo();
         if(e===ABORT){ aborted = true; break; }

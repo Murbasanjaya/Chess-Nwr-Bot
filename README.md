@@ -10,8 +10,14 @@ ditulis dari nol di `engine/chessEngine.js`.
 ## Fitur
 
 - AI buatan sendiri: minimax + alpha-beta pruning + quiescence search (nggak
-  salah baca posisi pas ada tukar bidak), evaluasi materi + piece-square table +
-  struktur pion (pion dobel/yatim) + pasangan gajah
+  salah baca posisi pas ada tukar bidak, termasuk pas lagi diskak), evaluasi
+  materi + piece-square table + struktur pion (dobel/yatim/**pion lolos**) +
+  pasangan gajah
+- **Transposition table**, **killer moves**, **history heuristic**, dan
+  **MVV-LVA move ordering** buat pruning yang jauh lebih efisien — AI bisa
+  mikir jauh lebih dalam di waktu yang sama
+- **Check extension** — kalau lagi diskak, AI cari lebih dalam lagi biar nggak
+  kelewat rangkaian skak/paksaan (dibatasi biar tetap aman & cepat)
 - Elo 400–5000 (makin tinggi, makin dalam AI menghitung — sampai 10 langkah ke
   depan di Elo maksimal, dan langsung eksekusi kalau nemu jalur skakmat paksa)
 - Buku pembukaan **154 variasi** (ECO code + nama + catatan counter singkat),
@@ -81,4 +87,3 @@ bilang aja, aku bisa bantu adaptasi strukturnya.
   pakai `isCheckmate()` dst) dan bakal bikin error.
 - Semua eval/AI ada di satu file (`engine/chessEngine.js`) biar gampang kamu
   oprek/tambahin sendiri kalau mau eksperimen.
-# Chess-Nwr-Bot
