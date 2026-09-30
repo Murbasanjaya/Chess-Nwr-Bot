@@ -137,15 +137,38 @@ function quiescence(g, alpha, beta, deadline, qLeft){
   return alpha;
 }
 
+// null-move pruning: skip beberapa cabang yang "kelihatan pasti bagus" dengan cara
+// coba lewatin giliran (null move) — kalau posisi masih >= beta meski musuh dikasih
+// giliran gratis, cabang ini bisa dipangkas. Dihindari saat endgame minim bidak
+// (rawan zugzwang) dan saat sedang skak.
+function nullMoveFen(fen){
+  const parts = fen.split(' ');
+  if(parts.length < 6) return null;
+  parts[1] = parts[1] === 'w' ? 'b' : 'w';
+  parts[3] = '-'; // hapus target en passant
+  return parts.join(' ');
+}
+function hasEnoughMaterialForNullMove(g){
+  const board = g.board();
+  const turn = g.turn();
+  let count = 0;
+  for(let row=0; row<8; row++) for(let col=0; col<8; col++){
+    const cell = board[row][col];
+    if(cell && cell.color===turn && cell.type!=='p' && cell.type!=='k') count++;
+  }
+  return count >= 2;
+}
+
 function negamax(g, depth, alpha, beta, deadline, killers, historyTable, tt, ext){
   if(g.in_checkmate()) return -100000 - depth;
   if(g.in_draw() || g.in_stalemate() || g.in_threefold_repetition()) return 0;
 
   // check extension: kalau lagi diskak, jangan hitung ply ini sebagai "biaya" — cari lebih dalam
   // biar nggak kelewat rangkaian skak/paksaan, dibatasi budget ext biar aman dari rantai tak terbatas.
+  const inCheckNow = g.in_check();
   let d = depth;
   let extended = false;
-  if(g.in_check() && ext > 0){ d = depth + 1; extended = true; }
+  if(inCheckNow && ext > 0){ d = depth + 1; extended = true; }
   if(d === 0) return quiescence(g, alpha, beta, deadline, 4);
   timeUp(deadline);
 
@@ -159,15 +182,43 @@ function negamax(g, depth, alpha, beta, deadline, killers, historyTable, tt, ext
   }
   const ttMove = ttEntry ? ttEntry.bestMove : null;
 
+  // null-move pruning
+  if(!extended && !inCheckNow && d >= 3 && beta < 90000 && hasEnoughMaterialForNullMove(g)){
+    const nFen = nullMoveFen(key);
+    if(nFen){
+      const g2 = new Chess(nFen);
+      const R = 2;
+      let nullScore;
+      try{ nullScore = -negamax(g2, d-1-R, -beta, -beta+1, deadline, killers, historyTable, tt, ext); }
+      catch(e){ throw e; }
+      if(nullScore >= beta) return beta;
+    }
+  }
+
   const killerPair = killers[d] || (killers[d] = [null,null]);
   let moves = orderMoves(g.moves({verbose:true}), ttMove, killerPair, historyTable);
   let best = -Infinity, bestMove = null;
   const childExt = extended ? ext - 1 : ext;
+  let moveIndex = 0;
   for(const m of moves){
     g.move(m);
+    const isQuiet = !m.captured && m.flags.indexOf('p')===-1;
+    const givesCheck = g.in_check();
     let score;
-    try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
-    catch(e){ g.undo(); throw e; }
+    // Late Move Reduction: langkah "diam" yang diurutkan belakangan kemungkinan kecil terbaik —
+    // cari dangkal dulu, dan HANYA re-search penuh kalau ternyata hasilnya menjanjikan (> alpha).
+    // Ini aman: hasil akhir tetap benar, cuma lebih hemat waktu buat cabang yang jarang berguna.
+    if(moveIndex>=3 && isQuiet && !givesCheck && !extended && d>=3){
+      try{ score = -negamax(g, d-1-1, -alpha-1, -alpha, deadline, killers, historyTable, tt, childExt); }
+      catch(e){ g.undo(); throw e; }
+      if(score > alpha){
+        try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
+        catch(e){ g.undo(); throw e; }
+      }
+    } else {
+      try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
+      catch(e){ g.undo(); throw e; }
+    }
     g.undo();
     if(score > best){ best = score; bestMove = m; }
     if(best > alpha) alpha = best;
@@ -178,6 +229,7 @@ function negamax(g, depth, alpha, beta, deadline, killers, historyTable, tt, ext
       }
       break;
     }
+    moveIndex++;
   }
   let flag = 'EXACT';
   if(best <= origAlpha) flag = 'UPPER';
@@ -237,15 +289,15 @@ function findBestMoves(fen, maxDepth, budgetMs){
 // ---------------- strength tiers ----------------
 function eloConfig(elo){
   if(elo<700)  return {maxDepth:2, budget:150, blunder:.40, top:5, tag:'Pemula — asal jalan, sering blunder'};
-  if(elo<1000) return {maxDepth:2, budget:250, blunder:.25, top:4, tag:'Santai — mikir sebentar, kadang meleset'};
-  if(elo<1300) return {maxDepth:3, budget:400, blunder:.15, top:3, tag:'Menengah — sesekali meleset'};
-  if(elo<1600) return {maxDepth:4, budget:600, blunder:.08, top:2, tag:'Cukup kuat — jarang blunder'};
-  if(elo<1900) return {maxDepth:4, budget:900, blunder:.04, top:2, tag:'Kuat — mulai menghitung taktik beberapa langkah'};
-  if(elo<2200) return {maxDepth:5, budget:1300, blunder:.015, top:1, tag:'Ahli — jeli baca kombinasi'};
-  if(elo<2600) return {maxDepth:6, budget:1800, blunder:0, top:1, tag:'Master — mengincar celah taktik & kombinasi menang'};
-  if(elo<3200) return {maxDepth:7, budget:2400, blunder:0, top:1, tag:'Grandmaster — menghitung dalam, memburu skakmat'};
-  if(elo<4000) return {maxDepth:8, budget:3000, blunder:0, top:1, tag:'Super GM — sangat sulit dikalahkan'};
-  return {maxDepth:10, budget:3800, blunder:0, top:1, tag:'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah'};
+  if(elo<1000) return {maxDepth:3, budget:250, blunder:.25, top:4, tag:'Santai — mikir sebentar, kadang meleset'};
+  if(elo<1300) return {maxDepth:4, budget:400, blunder:.15, top:3, tag:'Menengah — sesekali meleset'};
+  if(elo<1600) return {maxDepth:5, budget:650, blunder:.08, top:2, tag:'Cukup kuat — jarang blunder'};
+  if(elo<1900) return {maxDepth:5, budget:950, blunder:.04, top:2, tag:'Kuat — mulai menghitung taktik beberapa langkah'};
+  if(elo<2200) return {maxDepth:6, budget:1400, blunder:.015, top:1, tag:'Ahli — jeli baca kombinasi'};
+  if(elo<2600) return {maxDepth:7, budget:2000, blunder:0, top:1, tag:'Master — mengincar celah taktik & kombinasi menang'};
+  if(elo<3200) return {maxDepth:8, budget:2700, blunder:0, top:1, tag:'Grandmaster — menghitung dalam, memburu skakmat'};
+  if(elo<4000) return {maxDepth:10, budget:3500, blunder:0, top:1, tag:'Super GM — sangat sulit dikalahkan'};
+  return {maxDepth:12, budget:4500, blunder:0, top:1, tag:'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah'};
 }
 
 // ---------------- klasifikasi kualitas langkah ----------------

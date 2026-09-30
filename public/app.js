@@ -66,6 +66,7 @@
   const avatarBottom = document.getElementById('avatarBottom');
   const hintToggle = document.getElementById('hintToggle');
   const hintText = document.getElementById('hintText');
+  const playHintBtn = document.getElementById('playHintBtn');
   const modalOverlay = document.getElementById('modalOverlay');
   const modalEmoji = document.getElementById('modalEmoji');
   const modalTitle = document.getElementById('modalTitle');
@@ -383,6 +384,7 @@
   // ---------- suggestion / hint mode (asks the server) ----------
   function updateSuggestion(){
     clearSuggestion();
+    playHintBtn.style.display = 'none';
     if(!hintMode || botThinking || gameOverFlag || game.turn()!==humanColor){
       lastSuggestionMove = null;
       hintText.classList.remove('active');
@@ -401,8 +403,16 @@
       if(toEl) toEl.classList.add('suggest-to');
       hintText.classList.add('active');
       hintText.textContent = data.text;
+      playHintBtn.style.display = 'block';
     }).catch(()=>{ hintText.textContent = 'Server lagi sibuk, coba lagi sebentar.'; });
   }
+  playHintBtn.addEventListener('click', ()=>{
+    if(!lastSuggestionMove || botThinking || gameOverFlag || game.turn()!==humanColor) return;
+    ensureAudio();
+    const m = lastSuggestionMove;
+    const target = game.moves({square:m.from, verbose:true}).find(t=>t.to===m.to && (m.promotion?t.promotion===m.promotion:true));
+    if(target) doPlayerMove(target);
+  });
 
   // ---------- interaction ----------
   function onSquareClick(sq){

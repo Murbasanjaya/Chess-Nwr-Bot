@@ -23,13 +23,13 @@ module.exports = [
   {eco:'C27', name:"Vienna Gambit", moves:['e4','e5','Nc3','Nf6','f4'], counter:'Mirip semangat King\u2019s Gambit tapi lewat urutan Vienna; Hitam bisa ambil pion di e4/f4.'},
   {eco:'C30', name:"King's Gambit", moves:['e4','e5','f4'], counter:'Pembukaan romantis, korbanin pion f demi buka garis f dan serangan cepat ke f7.'},
   {eco:'C33', name:"King's Gambit Accepted", moves:['e4','e5','f4','exf4'], counter:'Hitam ambil pionnya; Putih lanjut Nf3 atau Bc4 buat rebut inisiatif.'},
-  {eco:'C30b', name:"King's Gambit Declined", moves:['e4','e5','f4','Bc5'], counter:'Hitam ogah ambil pion, malah balik nyerang lewat diagonal a7-g1.'},
+  {eco:'C30', name:"King's Gambit Declined", moves:['e4','e5','f4','Bc5'], counter:'Hitam ogah ambil pion, malah balik nyerang lewat diagonal a7-g1.'},
   {eco:'C23', name:"Bishop's Opening", moves:['e4','e5','Bc4'], counter:'Fleksibel, sering transposisi ke Italian Game atau Vienna.'},
   {eco:'C21', name:"Danish Gambit", moves:['e4','e5','d4','exd4','c3'], counter:'Putih korbanin 2 pion demi pengembangan superkilat; kalau Hitam pertahanan tepat, materi menang.'},
-  {eco:'C21b', name:"Center Game", moves:['e4','e5','d4','exd4','Qxd4'], counter:'Menteri Putih keluar dini dan gampang diserang tempo lewat ...Nc6.'},
-  {eco:'C44b', name:"Ponziani Opening", moves:['e4','e5','Nf3','Nc6','c3'], counter:'Putih siapin d4 dengan dukungan pion c; agak jarang dipakai tapi solid.'},
+  {eco:'C22', name:"Center Game", moves:['e4','e5','d4','exd4','Qxd4'], counter:'Menteri Putih keluar dini dan gampang diserang tempo lewat ...Nc6.'},
+  {eco:'C44', name:"Ponziani Opening", moves:['e4','e5','Nf3','Nc6','c3'], counter:'Putih siapin d4 dengan dukungan pion c; agak jarang dipakai tapi solid.'},
   {eco:'C40', name:"Latvian Gambit", moves:['e4','e5','Nf3','f5'], counter:'Hitam agresif tapi berisiko tinggi — kalau Putih tenang, materi/posisi lebih unggul.'},
-  {eco:'C40b', name:"Elephant Gambit", moves:['e4','e5','Nf3','d5'], counter:'Hitam korbanin pion demi buka posisi lebih awal; jarang dipakai di level atas.'},
+  {eco:'C40', name:"Elephant Gambit", moves:['e4','e5','Nf3','d5'], counter:'Hitam korbanin pion demi buka posisi lebih awal; jarang dipakai di level atas.'},
   {eco:'C20', name:"King's Pawn Game: Irregular", moves:['e4','e5'], counter:'Titik awal jutaan pembukaan King\u2019s Pawn — hasil akhir tergantung langkah ke-2 Putih.'},
 
   // ================= 1.e4 c5 — Sicilian Defense =================
@@ -45,7 +45,7 @@ module.exports = [
   {eco:'B23', name:"Sicilian: Closed Variation", moves:['e4','c5','Nc3'], counter:'Putih hindari teori tajam Open Sicilian, main perlahan lewat g3 & Bg2.'},
   {eco:'B22', name:"Sicilian: Alapin Variation", moves:['e4','c5','c3'], counter:'Putih siapin d4 dengan pion c; Hitam biasa balas ...Nf6 atau ...d5.'},
   {eco:'B21', name:"Sicilian: Grand Prix Attack", moves:['e4','c5','Nc3','Nc6','f4'], counter:'Putih incar serangan cepat kingside; Hitam counter lewat ...d5 atau ...g6.'},
-  {eco:'B21b', name:"Smith-Morra Gambit", moves:['e4','c5','d4','cxd4','c3'], counter:'Putih korbanin pion demi pengembangan cepat & garis terbuka; Hitam boleh terima kalau siap teori.'},
+  {eco:'B21', name:"Smith-Morra Gambit", moves:['e4','c5','d4','cxd4','c3'], counter:'Putih korbanin pion demi pengembangan cepat & garis terbuka; Hitam boleh terima kalau siap teori.'},
   {eco:'B31', name:"Sicilian: Rossolimo Variation", moves:['e4','c5','Nf3','Nc6','Bb5'], counter:'Putih hindari teori Open Sicilian yang berat, incer struktur pion via Bxc6.'},
   {eco:'B51', name:"Sicilian: Moscow Variation", moves:['e4','c5','Nf3','d6','Bb5+'], counter:'Skak lebih awal biar Hitam repot pilih blok (Nc6/Bd7/Nd7) sebelum lanjut teori berat.'},
 
@@ -57,7 +57,7 @@ module.exports = [
   {eco:'C15', name:"French: Winawer Variation", moves:['e4','e6','d4','d5','Nc3','Bb4'], counter:'Hitam pin kuda c3 sejak dini, sering nerima pion ganda demi pasangan gajah lawan/aktivitas.'},
   {eco:'C11', name:"French: Classical Variation", moves:['e4','e6','d4','d5','Nc3','Nf6'], counter:'Perkembangan alami; Putih sering lanjut Bg5 atau e5 buat tekan pusat.'},
   {eco:'C10', name:"French: Rubinstein Variation", moves:['e4','e6','d4','d5','Nc3','dxe4'], counter:'Hitam serah pusat lebih awal demi struktur solid & pengembangan cepat.'},
-  {eco:'C00b', name:"French: King's Indian Attack", moves:['e4','e6','d3'], counter:'Putih setup fianchetto (g3, Bg2) fleksibel, hindari teori French yang berat.'},
+  {eco:'C00', name:"French: King's Indian Attack", moves:['e4','e6','d3'], counter:'Putih setup fianchetto (g3, Bg2) fleksibel, hindari teori French yang berat.'},
 
   // ================= 1.e4 c6 — Caro-Kann =================
   {eco:'B10', name:"Caro-Kann Defense", moves:['e4','c6'], counter:'Mirip French tapi gajah c8 lebih bebas keluar duluan lewat ...Bf5.'},
@@ -69,15 +69,15 @@ module.exports = [
 
   // ================= Respons lain vs 1.e4 =================
   {eco:'B01', name:"Scandinavian Defense (Center Counter)", moves:['e4','d5'], counter:'Hitam langsung tantang pion e4; setelah exd5 Qxd5, menteri keluar dini jadi target tempo.'},
-  {eco:'B01b', name:"Scandinavian: Modern Variation", moves:['e4','d5','exd5','Nf6'], counter:'Hitam tunda ambil balik pion, kembangin kuda dulu demi tempo lebih baik.'},
+  {eco:'B01', name:"Scandinavian: Modern Variation", moves:['e4','d5','exd5','Nf6'], counter:'Hitam tunda ambil balik pion, kembangin kuda dulu demi tempo lebih baik.'},
   {eco:'B07', name:"Pirc Defense", moves:['e4','d6','d4','Nf6','Nc3','g6'], counter:'Hitam biarin Putih bangun pusat besar, lalu serang balik dari fianchetto & ...c5/...e5.'},
   {eco:'B09', name:"Pirc: Austrian Attack", moves:['e4','d6','d4','Nf6','Nc3','g6','f4'], counter:'Putih agresif bangun pusat pion besar (e4-d4-f4); Hitam harus tepat waktu serang balik.'},
   {eco:'B06', name:"Modern Defense", moves:['e4','g6'], counter:'Hitam fianchetto duluan tanpa komit struktur pion, super fleksibel.'},
   {eco:'B02', name:"Alekhine's Defense", moves:['e4','Nf6'], counter:'Hitam pancing pion Putih maju (e5, dst) lalu serang balik basis pion yang jadi rentan.'},
   {eco:'B03', name:"Alekhine: Four Pawns Attack", moves:['e4','Nf6','e5','Nd5','d4','d6','c4','Nb6','f4'], counter:'Putih bangun rantai pion raksasa; kalau Hitam serang balik tepat waktu, pion itu jadi lemah.'},
-  {eco:'B03b', name:"Alekhine: Exchange Variation", moves:['e4','Nf6','e5','Nd5','d4','d6','Nf3'], counter:'Putih main lebih tenang, hindari overextend pion.'},
+  {eco:'B03', name:"Alekhine: Exchange Variation", moves:['e4','Nf6','e5','Nd5','d4','d6','Nf3'], counter:'Putih main lebih tenang, hindari overextend pion.'},
   {eco:'B00', name:"Nimzowitsch Defense", moves:['e4','Nc6'], counter:'Hitam tunda tentuin struktur pusat, siap transposisi ke banyak sistem lain.'},
-  {eco:'B00b', name:"Owen's Defense", moves:['e4','b6'], counter:'Hitam fianchetto gajah c8 sejak langkah pertama, sangat hipermodern.'},
+  {eco:'B00', name:"Owen's Defense", moves:['e4','b6'], counter:'Hitam fianchetto gajah c8 sejak langkah pertama, sangat hipermodern.'},
 
   // ================= 1.d4 d5 — Queen's Pawn Games =================
   {eco:'D06', name:"Queen's Gambit", moves:['d4','d5','c4'], counter:'Putih tawarin pion c demi kendali pusat; Hitam bisa terima (QGA) atau tolak (QGD).'},
@@ -103,7 +103,7 @@ module.exports = [
   {eco:'E80', name:"King's Indian: Samisch Variation", moves:['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6','f3'], counter:'Putih perkuat pusat lewat f3 sebelum berkembang, lambat tapi kokoh.'},
   {eco:'E70', name:"King's Indian: Averbakh Variation", moves:['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6','Be2','O-O','Bg5'], counter:'Gajah ke g5 tekan langsung ke f6/d8, hindari rencana ...e5 mudah.'},
   {eco:'E76', name:"King's Indian: Four Pawns Attack", moves:['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6','f4'], counter:'Putih paling agresif rebut pusat; Hitam harus serang balik cepat sebelum ketiban.'},
-  {eco:'E60b', name:"King's Indian: Fianchetto Variation", moves:['d4','Nf6','c4','g6','Nf3','Bg7','g3'], counter:'Putih main tenang & solid lewat fianchetto ganda, hindari komplikasi tajam.'},
+  {eco:'E60', name:"King's Indian: Fianchetto Variation", moves:['d4','Nf6','c4','g6','Nf3','Bg7','g3'], counter:'Putih main tenang & solid lewat fianchetto ganda, hindari komplikasi tajam.'},
   {eco:'E20', name:"Nimzo-Indian Defense", moves:['d4','Nf6','c4','e6','Nc3','Bb4'], counter:'Hitam pin kuda c3 sejak dini, salah satu pembukaan paling dihormati sepanjang sejarah.'},
   {eco:'E32', name:"Nimzo-Indian: Classical Variation", moves:['d4','Nf6','c4','e6','Nc3','Bb4','Qc2'], counter:'Putih hindari pion ganda dengan Qc2, siap Qxc3 kalau ditukar.'},
   {eco:'E41', name:"Nimzo-Indian: Rubinstein Variation", moves:['d4','Nf6','c4','e6','Nc3','Bb4','e3'], counter:'Perkembangan paling populer & fleksibel buat Putih di era modern.'},
@@ -125,9 +125,9 @@ module.exports = [
 
   // ================= Sistem d4 yang lebih tenang =================
   {eco:'D02', name:"London System", moves:['d4','d5','Nf3','Nf6','Bf4'], counter:'Setup gampang dihafal & fleksibel, Putih pasang gajah ke f4 sebelum e3.'},
-  {eco:'D02b', name:"London System vs King's Indian setup", moves:['d4','Nf6','Nf3','g6','Bf4'], counter:'Putih pasang London walau Hitam fianchetto, tetap main sistematis.'},
+  {eco:'D02', name:"London System vs King's Indian setup", moves:['d4','Nf6','Nf3','g6','Bf4'], counter:'Putih pasang London walau Hitam fianchetto, tetap main sistematis.'},
   {eco:'A46', name:"Colle System", moves:['d4','d5','Nf3','Nf6','e3'], counter:'Putih siapin serangan lewat e4 di kemudian hari sambil berkembang rapi.'},
-  {eco:'A46b', name:"Torre Attack", moves:['d4','Nf6','Nf3','e6','Bg5'], counter:'Pin awal ke f6 bikin Hitam harus hati-hati sama struktur pion kalau tertukar.'},
+  {eco:'A46', name:"Torre Attack", moves:['d4','Nf6','Nf3','e6','Bg5'], counter:'Pin awal ke f6 bikin Hitam harus hati-hati sama struktur pion kalau tertukar.'},
   {eco:'A45', name:"Trompowsky Attack", moves:['d4','Nf6','Bg5'], counter:'Putih langsung pin/tekan kuda f6 sebelum Hitam sempat setup, hindari teori 1.d4 klasik.'},
   {eco:'D01', name:"Veresov Opening", moves:['d4','d5','Nc3','Nf6','Bg5'], counter:'Mirip semangat Trompowsky tapi lewat urutan Nc3 dulu.'},
   {eco:'A50', name:"Indian Defense: Irregular", moves:['d4','Nf6'], counter:'Titik awal semua sistem Indian — arah permainan tergantung langkah ke-2 Putih.'},
@@ -144,22 +144,22 @@ module.exports = [
   {eco:'A03', name:"Bird's Opening: From's Gambit", moves:['f4','e5'], counter:'Hitam korbanin pion demi buka garis f & serangan cepat ke raja Putih.'},
   {eco:'A01', name:"Larsen's Opening", moves:['b3'], counter:'Putih fianchetto gajah c1 duluan, kontrol e5 dari diagonal panjang.'},
   {eco:'A00', name:"Polish Opening (Sokolsky)", moves:['b4'], counter:'Putih rebut ruang queenside sejak langkah pertama, agak tidak biasa tapi fleksibel.'},
-  {eco:'A00b', name:"Grob's Attack", moves:['g4'], counter:'Sangat tidak ortodoks & berisiko, tapi bisa mengejutkan lawan yang tidak siap.'},
-  {eco:'A00c', name:"Van't Kruijs Opening", moves:['e3'], counter:'Langkah pasif & fleksibel, Putih tunda komit rencana sampai lihat respons Hitam.'},
-  {eco:'A00d', name:"Englund Gambit", moves:['d4','e5'], counter:'Hitam korbanin pion sejak langkah pertama demi jebakan taktis cepat.'},
-  {eco:'A00e', name:"St. George Defense", moves:['e4','a6'], counter:'Sangat jarang & tidak ortodoks, Hitam siapin ...b5 buat fianchetto gajah.'},
+  {eco:'A00', name:"Grob's Attack", moves:['g4'], counter:'Sangat tidak ortodoks & berisiko, tapi bisa mengejutkan lawan yang tidak siap.'},
+  {eco:'A00', name:"Van't Kruijs Opening", moves:['e3'], counter:'Langkah pasif & fleksibel, Putih tunda komit rencana sampai lihat respons Hitam.'},
+  {eco:'A40', name:"Englund Gambit", moves:['d4','e5'], counter:'Hitam korbanin pion sejak langkah pertama demi jebakan taktis cepat.'},
+  {eco:'B00', name:"St. George Defense", moves:['e4','a6'], counter:'Sangat jarang & tidak ortodoks, Hitam siapin ...b5 buat fianchetto gajah.'},
 
   // ================= Tambahan variasi populer =================
   {eco:'C77', name:"Ruy Lopez: Morphy Defense, Anderssen Variation", moves:['e4','e5','Nf3','Nc6','Bb5','a6','Ba4','Nf6','O-O','b5'], counter:'Hitam rebut ruang queenside lebih awal sebelum ...Be7.'},
   {eco:'C78', name:"Ruy Lopez: Archangelsk Variation", moves:['e4','e5','Nf3','Nc6','Bb5','a6','Ba4','Nf6','O-O','Bb7'], counter:'Gajah fianchetto ke b7 tekan langsung diagonal panjang ke e4.'},
   {eco:'C88', name:"Ruy Lopez: Closed, Anti-Marshall", moves:['e4','e5','Nf3','Nc6','Bb5','a6','Ba4','Nf6','O-O','Be7','Re1','b5','Bb3','O-O','a4'], counter:'Putih cegah Marshall Attack lebih awal lewat 8.a4 atau 8.h3.'},
-  {eco:'C42b', name:"Petrov: Steinitz Variation", moves:['e4','e5','Nf3','Nf6','Nxe5','d6','Nf3','Nxe4'], counter:'Hitam ambil balik pion e4 dengan aman setelah struktur pertukaran.'},
+  {eco:'C42', name:"Petrov: Steinitz Variation", moves:['e4','e5','Nf3','Nf6','Nxe5','d6','Nf3','Nxe4'], counter:'Hitam ambil balik pion e4 dengan aman setelah struktur pertukaran.'},
   {eco:'B76', name:"Sicilian: Dragon, Yugoslav Attack", moves:['e4','c5','Nf3','d6','d4','cxd4','Nxd4','Nf6','Nc3','g6','Be3','Bg7','f3','O-O','Qd2'], counter:'Perlombaan serangan raja paling terkenal di catur — kedua sisi push pion ke raja lawan.'},
   {eco:'B96', name:"Sicilian: Najdorf, English Attack", moves:['e4','c5','Nf3','d6','d4','cxd4','Nxd4','Nf6','Nc3','a6','Be3'], counter:'Putih siapin f3, Qd2, O-O-O buat serangan kingside cepat.'},
   {eco:'B62', name:"Sicilian: Richter-Rauzer Variation", moves:['e4','c5','Nf3','d6','d4','cxd4','Nxd4','Nf6','Nc3','Nc6','Bg5'], counter:'Pin ke f6 tekan struktur Hitam sebelum Hitam sempat ...e5/...g6.'},
   {eco:'B27', name:"Sicilian: Hyperaccelerated Dragon", moves:['e4','c5','Nf3','g6'], counter:'Fianchetto paling cepat, siap transposisi ke banyak jalur Dragon lain.'},
   {eco:'D46', name:"Semi-Slav: Chigorin Defense", moves:['d4','d5','c4','c6','Nc3','Nf6','e3','e6','Nf3','Nbd7'], counter:'Perkembangan solid sebelum tentuin rencana ...dxc4 atau ...Bd6.'},
-  {eco:'E60c', name:"King's Indian: Smyslov Variation", moves:['d4','Nf6','c4','g6','Nc3','Bg7','Nf3','d6','Bg5'], counter:'Gajah ke g5 tekan f6 sebelum Hitam sempat castling & ...e5.'},
+  {eco:'E60', name:"King's Indian: Smyslov Variation", moves:['d4','Nf6','c4','g6','Nc3','Bg7','Nf3','d6','Bg5'], counter:'Gajah ke g5 tekan f6 sebelum Hitam sempat castling & ...e5.'},
   {eco:'E61', name:"King's Indian: Petrosian Variation", moves:['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6','Nf3','O-O','Be2','e5','d5'], counter:'Putih kunci pusat lebih awal, main lambat & strategis lawan rencana kingside Hitam.'},
   {eco:'E97', name:"King's Indian: Bayonet Attack", moves:['d4','Nf6','c4','g6','Nc3','Bg7','e4','d6','Nf3','O-O','Be2','e5','O-O','Nc6','d5','Ne7','b4'], counter:'Putih dorong pion b lebih dulu buat percepat serangan queenside.'},
   {eco:'A34', name:"English: Symmetrical, Three Knights", moves:['c4','c5','Nc3','Nc6','Nf3','Nf6'], counter:'Perkembangan simetris alami, posisi seimbang sejak dini.'},
@@ -169,11 +169,11 @@ module.exports = [
   {eco:'D75', name:"Grünfeld: Fianchetto Variation", moves:['d4','Nf6','c4','g6','Nf3','Bg7','g3','d5','cxd5','Nxd5','Bg2'], counter:'Putih fianchetto juga demi kontrol diagonal panjang lawan diagonal Hitam.'},
   {eco:'E24', name:"Nimzo-Indian: Samisch, Romanishin Variation", moves:['d4','Nf6','c4','e6','Nc3','Bb4','a3','Bxc3+','bxc3','c5'], counter:'Hitam langsung serang basis pion c3/c4 yang baru terbentuk.'},
   {eco:'E54', name:"Nimzo-Indian: Rubinstein, Bronstein Variation", moves:['d4','Nf6','c4','e6','Nc3','Bb4','e3','O-O','Bd3','d5','Nf3','c5'], counter:'Hitam tekan pusat langsung lewat ...c5 sebelum Putih selesai berkembang.'},
-  {eco:'B18b', name:"Caro-Kann: Classical, Main Line", moves:['e4','c6','d4','d5','Nc3','dxe4','Nxe4','Bf5','Ng3','Bg6','h4','h6'], counter:'Kuda putih usir gajah Hitam, tapi Hitam tetap aman lewat ...h6 cegah h5 lanjutan.'},
-  {eco:'C11b', name:"French: Steinitz Variation", moves:['e4','e6','d4','d5','Nc3','Nf6','e5','Nfd7'], counter:'Putih rebut ruang lewat e5; kuda Hitam mundur siapin ...c5 & ...f6.'},
+  {eco:'B18', name:"Caro-Kann: Classical, Main Line", moves:['e4','c6','d4','d5','Nc3','dxe4','Nxe4','Bf5','Ng3','Bg6','h4','h6'], counter:'Kuda putih usir gajah Hitam, tapi Hitam tetap aman lewat ...h6 cegah h5 lanjutan.'},
+  {eco:'C11', name:"French: Steinitz Variation", moves:['e4','e6','d4','d5','Nc3','Nf6','e5','Nfd7'], counter:'Putih rebut ruang lewat e5; kuda Hitam mundur siapin ...c5 & ...f6.'},
   {eco:'B43', name:"Sicilian: Kan, 5.Nc3", moves:['e4','c5','Nf3','e6','d4','cxd4','Nxd4','a6','Nc3'], counter:'Putih kembangin kuda sebelum tentuin rencana Bd3/Be2, sangat fleksibel.'},
   {eco:'A29', name:"English: Four Knights, Kingside Fianchetto", moves:['c4','e5','Nc3','Nf6','Nf3','Nc6','g3'], counter:'Putih fianchetto demi tekanan jangka panjang di diagonal panjang.'},
   {eco:'A48', name:"King's Indian: London-style vs KID", moves:['d4','Nf6','Nf3','g6','g3'], counter:'Putih fianchetto tenang, hindari komplikasi tajam King\u2019s Indian klasik.'},
   {eco:'D37', name:"QGD: Classical Variation", moves:['d4','d5','c4','e6','Nc3','Nf6','Nf3','Be7'], counter:'Perkembangan paling ortodoks & aman buat Hitam lawan Queen\u2019s Gambit.'},
-  {eco:'A48b', name:"Neo-King's Indian", moves:['d4','Nf6','Nf3','g6','Bg5'], counter:'Putih tekan f6 lebih awal sebelum Hitam sempat fianchetto penuh.'}
+  {eco:'A48', name:"Neo-King's Indian", moves:['d4','Nf6','Nf3','g6','Bg5'], counter:'Putih tekan f6 lebih awal sebelum Hitam sempat fianchetto penuh.'}
 ];

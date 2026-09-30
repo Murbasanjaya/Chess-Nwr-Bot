@@ -13,15 +13,21 @@ ditulis dari nol di `engine/chessEngine.js`.
   salah baca posisi pas ada tukar bidak, termasuk pas lagi diskak), evaluasi
   materi + piece-square table + struktur pion (dobel/yatim/**pion lolos**) +
   pasangan gajah
-- **Transposition table**, **killer moves**, **history heuristic**, dan
-  **MVV-LVA move ordering** buat pruning yang jauh lebih efisien — AI bisa
-  mikir jauh lebih dalam di waktu yang sama
+- **Transposition table**, **null-move pruning**, **Late Move Reductions**,
+  **killer moves**, **history heuristic**, dan **MVV-LVA move ordering** —
+  kombinasi teknik yang sama dipakai engine catur serius buat mikir jauh lebih
+  dalam di waktu yang sama
 - **Check extension** — kalau lagi diskak, AI cari lebih dalam lagi biar nggak
   kelewat rangkaian skak/paksaan (dibatasi biar tetap aman & cepat)
+- Elo 400–5000, sekarang bisa mikir sampai **12 langkah ke depan** di level
+  maksimal
+- **Mode Saran + tombol "Mainkan Saran Ini"** — AI kasih tau (dan bisa
+  langsung mainin) langkah terbaik buat giliran kamu, sekali sentuh
 - Elo 400–5000 (makin tinggi, makin dalam AI menghitung — sampai 10 langkah ke
   depan di Elo maksimal, dan langsung eksekusi kalau nemu jalur skakmat paksa)
-- Buku pembukaan **154 variasi** (ECO code + nama + catatan counter singkat),
-  bisa dijelajahi langsung dari UI ("Jelajahi 150+ Pembukaan")
+- Buku pembukaan **154 variasi** (kode ECO diverifikasi ulang sesuai standar
+  resmi Encyclopaedia of Chess Openings — nama, urutan langkah, dan catatan
+  counter singkat), bisa dijelajahi langsung dari UI ("Jelajahi 150+ Pembukaan")
 - Bot otomatis mainin buku pembukaan di ~14 langkah pertama, baru mikir sendiri
   setelah itu
 - Badge kualitas langkah (💎 Brilian, ⭐ Hebat, ?! Kurang Tepat, ?? Blunder, dst)
