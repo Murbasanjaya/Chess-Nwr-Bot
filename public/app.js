@@ -394,7 +394,7 @@
     hintText.classList.remove('active');
     hintText.textContent = 'Menghitung saran di server…';
     const fen = game.fen();
-    api('/api/hint', { fen }).then(data=>{
+    api('/api/hint', { fen, sanHistory: game.history() }).then(data=>{
       if(!hintMode || game.turn()!==humanColor || gameOverFlag || game.fen()!==fen) return;
       const m = data.move;
       lastSuggestionMove = m;

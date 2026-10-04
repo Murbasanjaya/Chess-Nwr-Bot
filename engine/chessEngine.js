@@ -1,354 +1,390 @@
-// Engine catur buatan sendiri — jalan sepenuhnya di server (Node.js).
-// Minimax + alpha-beta + quiescence search + evaluasi posisional (material, PST,
-// struktur pion, pasangan gajah) + buku pembukaan. Tidak pakai Stockfish atau
-// library engine pihak ketiga — cuma chess.js buat aturan main (legalitas langkah).
+'use strict';
+// ============================================================================
+// chessEngine.js — "muka" engine yang dipakai server.js.
+//
+// Otak sebenarnya ada di tiga file:
+//   engine/position.js   — papan cepat (0x88), movegen, Zobrist, make/unmake, SEE
+//   engine/evaluate.js   — evaluasi posisi (tapered: midgame + endgame)
+//   engine/search.js     — negamax + alpha-beta + semua teknik pemangkasan
+//
+// File ini yang ngurus: terjemahan ke/dari chess.js (biar bentuk objek langkahnya
+// sama persis seperti sebelumnya buat frontend), buku pembukaan, level Elo,
+// pemilihan langkah, dan klasifikasi kualitas langkah.
+//
+// Tetap bukan Stockfish — semua kode pencarian & evaluasi di repo ini buatan
+// sendiri. chess.js cuma dipakai di batas API (validasi + penulisan SAN), nggak
+// pernah masuk ke dalam loop pencarian.
+// ============================================================================
 
 const { Chess } = require('chess.js');
 const OPENINGS = require('../data/openings.js');
+const P = require('./position.js');
+const EV = require('./evaluate.js');
+const { Searcher, MATE, MATE_IN_MAX } = require('./search.js');
 
-// ---------------- nilai bidak & piece-square tables ----------------
-const VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+const { Position, MFROM, MTO, MPROMO, algebraic, PIECE_CHAR } = P;
+const { evaluate, absoluteEval, VAL } = EV;
 
-const PST = {
-  p: [0,0,0,0,0,0,0,0, 50,50,50,50,50,50,50,50, 10,10,20,30,30,20,10,10, 5,5,10,25,25,10,5,5,
-      0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5, 5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0],
-  n: [-50,-40,-30,-30,-30,-30,-40,-50, -40,-20,0,0,0,0,-20,-40, -30,0,10,15,15,10,0,-30,
-      -30,5,15,20,20,15,5,-30, -30,0,15,20,20,15,0,-30, -30,5,10,15,15,10,5,-30,
-      -40,-20,0,5,5,0,-20,-40, -50,-40,-30,-30,-30,-30,-40,-50],
-  b: [-20,-10,-10,-10,-10,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,10,10,5,0,-10,
-      -10,5,5,10,10,5,5,-10, -10,0,10,10,10,10,0,-10, -10,10,10,10,10,10,10,-10,
-      -10,5,0,0,0,0,5,-10, -20,-10,-10,-10,-10,-10,-10,-20],
-  r: [0,0,0,0,0,0,0,0, 5,10,10,10,10,10,10,5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5,
-      -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, 0,0,0,5,5,0,0,0],
-  q: [-20,-10,-10,-5,-5,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,5,5,5,0,-10,
-      -5,0,5,5,5,5,0,-5, 0,0,5,5,5,5,0,-5, -10,5,5,5,5,5,0,-10, -10,0,5,0,0,0,0,-10,
-      -20,-10,-10,-5,-5,-10,-10,-20],
-  k: [-30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
-      -30,-40,-40,-50,-50,-40,-40,-30, -20,-30,-30,-40,-40,-30,-30,-20, -10,-20,-20,-20,-20,-20,-20,-10,
-      20,20,0,0,0,0,20,20, 20,30,10,0,0,10,30,20]
-};
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-function pieceValueOf(type){ return VAL[type] || 0; }
+// Satu Searcher dipakai terus-menerus: tabel transposisi, killer, dan history
+// jadi "ingatan" yang kebawa dari langkah ke langkah. Hasilnya, langkah kedua
+// dan seterusnya di satu partai jauh lebih cepat sampai kedalaman yang sama.
+// Node single-thread & pencarian ini sinkron, jadi request nggak akan tumpang
+// tindih di tengah pencarian.
+const searcher = new Searcher();
 
-function absoluteEval(g){
-  const board = g.board();
-  let score = 0;
-  const pawnFilesW = [0,0,0,0,0,0,0,0], pawnFilesB = [0,0,0,0,0,0,0,0];
-  const pawnsW = [], pawnsB = []; // {row,col} — dipakai buat cek pion lolos (passed pawn)
-  let bishopsW = 0, bishopsB = 0;
-  for(let row=0; row<8; row++){
-    for(let col=0; col<8; col++){
-      const cell = board[row][col];
-      if(!cell) continue;
-      const idx = row*8+col;
-      const tbl = PST[cell.type];
-      if(cell.color === 'w'){
-        score += VAL[cell.type] + tbl[idx];
-        if(cell.type === 'p'){ pawnFilesW[col]++; pawnsW.push({row,col}); }
-        else if(cell.type === 'b') bishopsW++;
-      } else {
-        const mIdx = (7-row)*8+col;
-        score -= VAL[cell.type] + tbl[mIdx];
-        if(cell.type === 'p'){ pawnFilesB[col]++; pawnsB.push({row,col}); }
-        else if(cell.type === 'b') bishopsB++;
-      }
-    }
-  }
-  // struktur pion: dobel & yatim
-  for(let f=0; f<8; f++){
-    if(pawnFilesW[f]>1) score -= 16*(pawnFilesW[f]-1);
-    if(pawnFilesB[f]>1) score += 16*(pawnFilesB[f]-1);
-    if(pawnFilesW[f]>0 && !(f>0&&pawnFilesW[f-1]>0) && !(f<7&&pawnFilesW[f+1]>0)) score -= 12*pawnFilesW[f];
-    if(pawnFilesB[f]>0 && !(f>0&&pawnFilesB[f-1]>0) && !(f<7&&pawnFilesB[f+1]>0)) score += 12*pawnFilesB[f];
-  }
-  // pion lolos (passed pawn): makin dekat promosi, makin besar bonusnya
-  const PASSED_BONUS = [0,10,20,35,55,80,120,0]; // indeks by "langkah menuju promosi", disesuaikan di bawah
-  for(const p of pawnsW){
-    let blocked = false;
-    for(const e of pawnsB){ if(Math.abs(e.col-p.col)<=1 && e.row < p.row){ blocked = true; break; } }
-    if(!blocked) score += PASSED_BONUS[6-p.row] || 0; // row kecil = makin dekat rank8; buat putih maju row makin kecil
-  }
-  for(const p of pawnsB){
-    let blocked = false;
-    for(const e of pawnsW){ if(Math.abs(e.col-p.col)<=1 && e.row > p.row){ blocked = true; break; } }
-    if(!blocked) score -= PASSED_BONUS[p.row-1] || 0;
-  }
-  // pasangan gajah
-  if(bishopsW>=2) score += 30;
-  if(bishopsB>=2) score -= 30;
-  return score;
+// Skor di atas ini artinya skakmat paksa sudah ketemu.
+const MATE_THRESHOLD = MATE_IN_MAX;
+
+function pieceValueOf(type) { return VAL[type] || 0; }
+
+// ---------------- jembatan ke chess.js ----------------
+function uciOf(m) {
+  let s = algebraic(MFROM(m)) + algebraic(MTO(m));
+  const p = MPROMO(m);
+  if (p) s += PIECE_CHAR[p];
+  return s;
 }
 
-function mvvLva(m){
-  // Most Valuable Victim - Least Valuable Attacker: makan bidak mahal pakai bidak murah duluan
-  if(!m.captured) return -1;
-  return 10*pieceValueOf(m.captured) - pieceValueOf(m.piece);
+// Petakan langkah internal (integer) ke objek verbose chess.js, biar bentuk
+// datanya persis sama seperti versi lama (ada .san, .flags, .piece, dll).
+function mapToVerbose(fen, internalMoves) {
+  const legal = new Chess(fen).moves({ verbose: true });
+  const byKey = new Map();
+  for (const lm of legal) byKey.set(lm.from + lm.to + (lm.promotion || ''), lm);
+  const out = [];
+  for (const im of internalMoves) {
+    const v = byKey.get(uciOf(im));
+    out.push(v || null);
+  }
+  return out;
 }
-function sameMove(a,b){ return a && b && a.from===b.from && a.to===b.to && a.promotion===b.promotion; }
 
-function orderMoves(moves, ttMove, killerPair, historyTable){
-  return moves.slice().sort((a,b)=>{
-    const aTT = sameMove(a, ttMove), bTT = sameMove(b, ttMove);
-    if(aTT && !bTT) return -1; if(bTT && !aTT) return 1;
-    const av = mvvLva(a), bv = mvvLva(b);
-    if(av !== bv) return bv - av; // capture, urut MVV-LVA (non-capture selalu -1, jadi capture apapun didahulukan)
-    if(av === -1){ // sama-sama non-capture: cek killer move lalu history heuristic
-      const aK = killerPair && (sameMove(a,killerPair[0]) || sameMove(a,killerPair[1]));
-      const bK = killerPair && (sameMove(b,killerPair[0]) || sameMove(b,killerPair[1]));
-      if(aK && !bK) return -1; if(bK && !aK) return 1;
-      const ah = (historyTable[a.from+a.to]||0), bh = (historyTable[b.from+b.to]||0);
-      return bh - ah;
+// Riwayat posisi dari daftar SAN, supaya engine tahu posisi apa saja yang sudah
+// pernah muncul (deteksi ulangan/seri yang benar).
+function buildHistoryEntries(sanHistory) {
+  if (!Array.isArray(sanHistory) || sanHistory.length === 0) return null;
+  try {
+    const g = new Chess();
+    const tmp = new Position();
+    const entries = [];
+    tmp.setFen(START_FEN);
+    entries.push([tmp.keyA, tmp.keyB, 1]);
+    for (const san of sanHistory) {
+      const mv = g.move(san, { sloppy: true });
+      if (!mv) return null;
+      tmp.setFen(g.fen());
+      // halfmove clock 0 = langkah tak bisa diulang (pion maju / makan)
+      entries.push([tmp.keyA, tmp.keyB, tmp.halfmove === 0 ? 1 : 0]);
     }
-    return 0;
+    entries.pop(); // posisi terakhir = posisi sekarang, sudah ada sendiri
+    return { entries, fen: g.fen() };
+  } catch (e) {
+    return null;
+  }
+}
+
+function newPosition(fen, sanHistory) {
+  const pos = new Position().setFen(fen);
+  const hist = buildHistoryEntries(sanHistory);
+  if (hist && hist.fen.split(' ').slice(0, 4).join(' ') === fen.split(' ').slice(0, 4).join(' ')) {
+    pos.seedHistory(hist.entries);
+  }
+  return pos;
+}
+
+// ---------------- API utama ----------------
+/**
+ * Cari langkah terbaik, plus skor SEMUA langkah legal di posisi itu.
+ *
+ * Bentuk hasilnya sengaja dibuat sama seperti versi lama: array
+ * [{ m: <objek langkah chess.js>, s: <skor centipawn> }] urut dari terbaik,
+ * jadi server.js & klasifikasi langkah nggak perlu diubah.
+ *
+ * @param {string} fen        posisi
+ * @param {number} maxDepth   batas kedalaman (search tetap dibatasi waktu juga)
+ * @param {number} budgetMs   jatah waktu mikir
+ * @param {object} [opts]     { sanHistory, nodeLimit, classMargin }
+ */
+function findBestMoves(fen, maxDepth, budgetMs, opts) {
+  opts = opts || {};
+  const pos = newPosition(fen, opts.sanHistory);
+  const res = searcher.searchRoot(pos, {
+    maxDepth: maxDepth || 64,
+    budgetMs: budgetMs == null ? 1500 : budgetMs,
+    nodeLimit: opts.nodeLimit,
+    classMargin: opts.classMargin,
   });
+  const verbose = mapToVerbose(fen, res.rootMoves.map(r => r.move));
+  const scored = [];
+  for (let i = 0; i < res.rootMoves.length; i++) {
+    if (!verbose[i]) continue; // seharusnya nggak kejadian; aman-aman saja
+    scored.push({ m: verbose[i], s: res.rootMoves[i].score });
+  }
+  scored.info = {
+    depth: res.depth, seldepth: res.seldepth, nodes: res.nodes,
+    timeMs: res.timeMs, mate: res.mate,
+    nps: res.timeMs > 0 ? Math.round(res.nodes / res.timeMs * 1000) : 0,
+    pv: mapToVerbose(fen, res.pv.length ? [res.pv[0]] : []).filter(Boolean).map(v => v.san),
+  };
+  return scored;
 }
 
-// ---------------- search: quiescence + negamax + alpha-beta, time-boxed ----------------
-const ABORT = Symbol('abort');
-let nodeCheckCounter = 0;
-function timeUp(deadline){
-  if((nodeCheckCounter = (nodeCheckCounter+1) & 1023) === 0){
-    if(Date.now() > deadline) throw ABORT;
-  }
-}
-
-function quiescence(g, alpha, beta, deadline, qLeft){
-  timeUp(deadline);
-  if(g.in_checkmate()) return -100000;
-  const inCheck = g.in_check();
-  if(!inCheck){
-    const standPat = (g.turn()==='w'?1:-1) * absoluteEval(g);
-    if(standPat >= beta) return beta;
-    if(alpha < standPat) alpha = standPat;
-    if(qLeft <= 0) return alpha;
-  }
-  // kalau lagi diskak, semua langkah legal wajib dipertimbangkan (nggak ada opsi "diam saja")
-  let moves = inCheck ? g.moves({verbose:true}) : g.moves({verbose:true}).filter(m => m.captured || m.flags.indexOf('p')!==-1);
-  moves.sort((a,b)=> mvvLva(b) - mvvLva(a));
-  for(const m of moves){
-    g.move(m);
-    let score;
-    try{ score = -quiescence(g, -beta, -alpha, deadline, inCheck?qLeft:qLeft-1); }
-    catch(e){ g.undo(); throw e; }
-    g.undo();
-    if(score >= beta) return beta;
-    if(score > alpha) alpha = score;
-  }
-  return alpha;
-}
-
-// null-move pruning: skip beberapa cabang yang "kelihatan pasti bagus" dengan cara
-// coba lewatin giliran (null move) — kalau posisi masih >= beta meski musuh dikasih
-// giliran gratis, cabang ini bisa dipangkas. Dihindari saat endgame minim bidak
-// (rawan zugzwang) dan saat sedang skak.
-function nullMoveFen(fen){
-  const parts = fen.split(' ');
-  if(parts.length < 6) return null;
-  parts[1] = parts[1] === 'w' ? 'b' : 'w';
-  parts[3] = '-'; // hapus target en passant
-  return parts.join(' ');
-}
-function hasEnoughMaterialForNullMove(g){
-  const board = g.board();
-  const turn = g.turn();
-  let count = 0;
-  for(let row=0; row<8; row++) for(let col=0; col<8; col++){
-    const cell = board[row][col];
-    if(cell && cell.color===turn && cell.type!=='p' && cell.type!=='k') count++;
-  }
-  return count >= 2;
-}
-
-function negamax(g, depth, alpha, beta, deadline, killers, historyTable, tt, ext){
-  if(g.in_checkmate()) return -100000 - depth;
-  if(g.in_draw() || g.in_stalemate() || g.in_threefold_repetition()) return 0;
-
-  // check extension: kalau lagi diskak, jangan hitung ply ini sebagai "biaya" — cari lebih dalam
-  // biar nggak kelewat rangkaian skak/paksaan, dibatasi budget ext biar aman dari rantai tak terbatas.
-  const inCheckNow = g.in_check();
-  let d = depth;
-  let extended = false;
-  if(inCheckNow && ext > 0){ d = depth + 1; extended = true; }
-  if(d === 0) return quiescence(g, alpha, beta, deadline, 4);
-  timeUp(deadline);
-
-  const key = g.fen();
-  const origAlpha = alpha;
-  let ttEntry = tt.get(key);
-  if(ttEntry && ttEntry.depth >= d){
-    if(ttEntry.flag === 'EXACT') return ttEntry.score;
-    if(ttEntry.flag === 'LOWER' && ttEntry.score >= beta) return ttEntry.score;
-    if(ttEntry.flag === 'UPPER' && ttEntry.score <= alpha) return ttEntry.score;
-  }
-  const ttMove = ttEntry ? ttEntry.bestMove : null;
-
-  // null-move pruning
-  if(!extended && !inCheckNow && d >= 3 && beta < 90000 && hasEnoughMaterialForNullMove(g)){
-    const nFen = nullMoveFen(key);
-    if(nFen){
-      const g2 = new Chess(nFen);
-      const R = 2;
-      let nullScore;
-      try{ nullScore = -negamax(g2, d-1-R, -beta, -beta+1, deadline, killers, historyTable, tt, ext); }
-      catch(e){ throw e; }
-      if(nullScore >= beta) return beta;
+/** Analisis lengkap satu posisi (dipakai endpoint /api/analyze). */
+function analyze(fen, opts) {
+  opts = opts || {};
+  const pos = newPosition(fen, opts.sanHistory);
+  const res = searcher.searchRoot(pos, {
+    maxDepth: opts.maxDepth || 64,
+    budgetMs: opts.budgetMs == null ? 1200 : opts.budgetMs,
+    classMargin: opts.classMargin,
+  });
+  const pvVerbose = [];
+  {
+    // tulis PV dalam SAN dengan menelusuri posisinya pakai chess.js
+    const g = new Chess(fen);
+    for (const im of res.pv) {
+      const legal = g.moves({ verbose: true });
+      const want = uciOf(im);
+      const found = legal.find(l => (l.from + l.to + (l.promotion || '')) === want);
+      if (!found) break;
+      g.move(found);
+      pvVerbose.push(found.san);
     }
   }
-
-  const killerPair = killers[d] || (killers[d] = [null,null]);
-  let moves = orderMoves(g.moves({verbose:true}), ttMove, killerPair, historyTable);
-  let best = -Infinity, bestMove = null;
-  const childExt = extended ? ext - 1 : ext;
-  let moveIndex = 0;
-  for(const m of moves){
-    g.move(m);
-    const isQuiet = !m.captured && m.flags.indexOf('p')===-1;
-    const givesCheck = g.in_check();
-    let score;
-    // Late Move Reduction: langkah "diam" yang diurutkan belakangan kemungkinan kecil terbaik —
-    // cari dangkal dulu, dan HANYA re-search penuh kalau ternyata hasilnya menjanjikan (> alpha).
-    // Ini aman: hasil akhir tetap benar, cuma lebih hemat waktu buat cabang yang jarang berguna.
-    if(moveIndex>=3 && isQuiet && !givesCheck && !extended && d>=3){
-      try{ score = -negamax(g, d-1-1, -alpha-1, -alpha, deadline, killers, historyTable, tt, childExt); }
-      catch(e){ g.undo(); throw e; }
-      if(score > alpha){
-        try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
-        catch(e){ g.undo(); throw e; }
-      }
-    } else {
-      try{ score = -negamax(g, d-1, -beta, -alpha, deadline, killers, historyTable, tt, childExt); }
-      catch(e){ g.undo(); throw e; }
-    }
-    g.undo();
-    if(score > best){ best = score; bestMove = m; }
-    if(best > alpha) alpha = best;
-    if(alpha >= beta){
-      if(!m.captured){
-        if(!sameMove(m, killerPair[0])){ killerPair[1] = killerPair[0]; killerPair[0] = m; }
-        historyTable[m.from+m.to] = (historyTable[m.from+m.to]||0) + d*d;
-      }
-      break;
-    }
-    moveIndex++;
-  }
-  let flag = 'EXACT';
-  if(best <= origAlpha) flag = 'UPPER';
-  else if(best >= beta) flag = 'LOWER';
-  tt.set(key, { depth: d, score: best, flag, bestMove });
-  return best;
+  const verbose = mapToVerbose(fen, res.best ? [res.best] : [])[0] || null;
+  return {
+    best: verbose,
+    score: res.score,
+    mate: res.mate,
+    depth: res.depth,
+    seldepth: res.seldepth,
+    nodes: res.nodes,
+    timeMs: res.timeMs,
+    nps: res.timeMs > 0 ? Math.round(res.nodes / res.timeMs * 1000) : 0,
+    pv: pvVerbose,
+    eval: evaluate(pos),
+  };
 }
 
-// Iterative deepening bounded by wall-clock time. Runs fully synchronously —
-// on the server this is fine, it doesn't freeze anyone's browser; only this
-// one HTTP request waits on it.
-const CHECK_EXT_BUDGET = 6;
-function findBestMoves(fen, maxDepth, budgetMs){
-  const deadline = Date.now() + budgetMs;
-  const g = new Chess(fen);
-  const tt = new Map();
-  const killers = [];
-  const historyTable = {};
-  let overallBest = null, pv = null, depth = 1;
-  while(depth <= maxDepth && Date.now() < deadline){
-    const rootMoves = orderMoves(g.moves({verbose:true}), pv, killers[depth]||[null,null], historyTable);
-    if(rootMoves.length === 0) break;
-    const scored = [];
-    let aborted = false;
-    for(const m of rootMoves){
-      g.move(m);
-      let s;
-      try{ s = -negamax(g, depth-1, -Infinity, Infinity, deadline, killers, historyTable, tt, CHECK_EXT_BUDGET); }
-      catch(e){
-        g.undo();
-        if(e===ABORT){ aborted = true; break; }
-        throw e;
-      }
-      g.undo();
-      scored.push({ m, s });
-    }
-    if(aborted) break;
-    scored.sort((a,b)=>b.s-a.s);
-    overallBest = scored;
-    pv = scored[0].m;
-    depth++;
+/** Cari langkah internal (integer) yang cocok dengan {from,to,promotion}. */
+function internalMoveOf(pos, move) {
+  const want = move.from + move.to + (move.promotion || '');
+  const n = pos.generate(0, false);
+  for (let i = 0; i < n; i++) {
+    const m = pos.moveBuf[i];
+    if (uciOf(m) === want) return m;
   }
-  if(!overallBest){
-    // budget ran out before even depth 1 finished (shouldn't normally happen) — just grade every legal move at depth 0
-    const g2 = new Chess(fen);
-    const rootMoves = g2.moves({verbose:true});
-    overallBest = rootMoves.map(m=>{
-      g2.move(m);
-      const s = -((g2.turn()==='w'?1:-1) * absoluteEval(g2));
-      g2.undo();
-      return {m, s};
-    }).sort((a,b)=>b.s-a.s);
-  }
-  return overallBest;
+  return 0;
 }
 
-// ---------------- strength tiers ----------------
-function eloConfig(elo){
-  if(elo<700)  return {maxDepth:2, budget:150, blunder:.40, top:5, tag:'Pemula — asal jalan, sering blunder'};
-  if(elo<1000) return {maxDepth:3, budget:250, blunder:.25, top:4, tag:'Santai — mikir sebentar, kadang meleset'};
-  if(elo<1300) return {maxDepth:4, budget:400, blunder:.15, top:3, tag:'Menengah — sesekali meleset'};
-  if(elo<1600) return {maxDepth:5, budget:650, blunder:.08, top:2, tag:'Cukup kuat — jarang blunder'};
-  if(elo<1900) return {maxDepth:5, budget:950, blunder:.04, top:2, tag:'Kuat — mulai menghitung taktik beberapa langkah'};
-  if(elo<2200) return {maxDepth:6, budget:1400, blunder:.015, top:1, tag:'Ahli — jeli baca kombinasi'};
-  if(elo<2600) return {maxDepth:7, budget:2000, blunder:0, top:1, tag:'Master — mengincar celah taktik & kombinasi menang'};
-  if(elo<3200) return {maxDepth:8, budget:2700, blunder:0, top:1, tag:'Grandmaster — menghitung dalam, memburu skakmat'};
-  if(elo<4000) return {maxDepth:10, budget:3500, blunder:0, top:1, tag:'Super GM — sangat sulit dikalahkan'};
-  return {maxDepth:12, budget:4500, blunder:0, top:1, tag:'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah'};
+/** Static exchange evaluation buat satu langkah (dipakai badge "Brilian"). */
+function seeOfMove(fen, move) {
+  try {
+    const pos = new Position().setFen(fen);
+    const m = internalMoveOf(pos, move);
+    return m ? pos.see(m) : 0;
+  } catch (e) { /* abaikan */ }
+  return 0;
+}
+
+// ---------------- level kekuatan (Elo) ----------------
+// Angka depth di sini realistis buat engine baru: depth 8 cuma butuh ~0,5 detik,
+// jadi level atas bisa mikir 14–30 langkah ke depan dalam waktu 1–3 detik.
+//
+//   maxDepth : batas kedalaman
+//   budget   : jatah waktu (ms) — ini yang biasanya jadi penentu
+//   blunder  : peluang sengaja main langkah jelek (biar level bawah manusiawi)
+//   top      : ambil acak dari N langkah terbaik
+//   noise    : toleransi centipawn — langkah yang selisihnya di bawah ini
+//              dianggap "sama bagus" dan boleh dipilih acak
+function eloConfig(elo) {
+  if (elo < 700)  return { maxDepth: 2,  budget: 60,   blunder: .42,  top: 6, noise: 220, tag: 'Pemula — asal jalan, sering blunder' };
+  if (elo < 1000) return { maxDepth: 3,  budget: 100,  blunder: .26,  top: 5, noise: 150, tag: 'Santai — mikir sebentar, kadang meleset' };
+  if (elo < 1300) return { maxDepth: 5,  budget: 160,  blunder: .15,  top: 4, noise: 90,  tag: 'Menengah — sesekali meleset' };
+  if (elo < 1600) return { maxDepth: 7,  budget: 260,  blunder: .075, top: 3, noise: 55,  tag: 'Cukup kuat — jarang blunder' };
+  if (elo < 1900) return { maxDepth: 9,  budget: 420,  blunder: .035, top: 2, noise: 35,  tag: 'Kuat — menghitung taktik beberapa langkah' };
+  if (elo < 2200) return { maxDepth: 11, budget: 700,  blunder: .012, top: 2, noise: 22,  tag: 'Ahli — jeli baca kombinasi' };
+  if (elo < 2600) return { maxDepth: 14, budget: 1100, blunder: 0,    top: 1, noise: 12,  tag: 'Master — mengincar celah taktik & kombinasi menang' };
+  if (elo < 3200) return { maxDepth: 18, budget: 1600, blunder: 0,    top: 1, noise: 6,   tag: 'Grandmaster — menghitung dalam, memburu skakmat' };
+  if (elo < 4000) return { maxDepth: 24, budget: 2200, blunder: 0,    top: 1, noise: 0,   tag: 'Super GM — sangat sulit dikalahkan' };
+  return { maxDepth: 48, budget: 3000, blunder: 0, top: 1, noise: 0, tag: 'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah' };
+}
+
+/**
+ * Pilih langkah dari daftar hasil search sesuai level.
+ *
+ * Bedanya dengan versi lama: kalau level bawah "salah langkah", dia nggak
+ * langsung ambil langkah terburuk di papan (itu kelihatan aneh/nggak manusiawi),
+ * tapi langkah yang rugi sekitar 1–4 bidak — tipe kesalahan yang beneran
+ * dilakukan pemain. Skakmat paksa tetap selalu dimainkan.
+ */
+function pickMove(scored, cfg) {
+  if (!scored || scored.length === 0) return -1;
+  if (scored.length === 1) return 0;
+  if (scored[0].s >= MATE_THRESHOLD) return 0;      // skakmat ketemu: jangan main-main
+  if (scored[0].s <= -MATE_THRESHOLD) return 0;     // sudah kalah paksa: ambil yang paling lama
+
+  if (cfg.blunder > 0 && Math.random() < cfg.blunder) {
+    // kesalahan "manusiawi": rugi 80–450 cp kalau ada pilihan seperti itu
+    const best = scored[0].s;
+    const pool = [];
+    for (let i = 1; i < scored.length; i++) {
+      const loss = best - scored[i].s;
+      if (loss >= 80 && loss <= 450) pool.push(i);
+    }
+    if (pool.length) return pool[Math.floor(Math.random() * pool.length)];
+    // nggak ada pilihan "agak jelek": ambil dari paruh bawah
+    const start = Math.max(1, Math.ceil(scored.length / 2));
+    return Math.min(scored.length - 1, start + Math.floor(Math.random() * Math.max(1, scored.length - start)));
+  }
+
+  // langkah-langkah yang praktis sama bagusnya: pilih acak biar nggak monoton
+  const limit = Math.max(1, Math.min(cfg.top || 1, scored.length));
+  let n = 1;
+  while (n < limit && scored[0].s - scored[n].s <= (cfg.noise || 0)) n++;
+  return Math.floor(Math.random() * n);
 }
 
 // ---------------- klasifikasi kualitas langkah ----------------
-function classifyMove(scored, playedIdx, plyNumber){
-  if(plyNumber<=6) return {tier:'book', label:'Buku', chip:'📖'};
-  const best = scored[0].s;
-  const played = scored[playedIdx].s;
-  const loss = best - played;
-  const isBest = playedIdx === 0;
-  if(isBest){
-    const m = scored[0].m;
-    const second = scored.length>1 ? scored[1].s : best;
-    const gap = best - second;
-    if(m.captured && pieceValueOf(m.piece) > pieceValueOf(m.captured)+150 && gap>=60) return {tier:'brilliant', label:'Brilian', chip:'💎'};
-    if(gap>=180) return {tier:'great', label:'Hebat', chip:'⭐'};
-    return {tier:'best', label:'Terbaik', chip:'✓'};
+const BOOK_TAG = { tier: 'book', label: 'Buku', chip: '📖' };
+
+// Ambang batas penilaian, dipakai bareng oleh dua jalur klasifikasi di bawah.
+//   loss  = seberapa banyak centipawn yang hilang dibanding langkah terbaik
+//   gap   = selisih langkah terbaik ke langkah terbaik kedua
+//   see   = static exchange evaluation langkahnya (negatif = mengorbankan materi)
+function qualityFromLoss(loss, isBest, gap, see) {
+  if (isBest) {
+    // "Brilian": langkah terbaik yang MENGORBANKAN materi tapi tetap jauh lebih
+    // baik dari langkah lain — korban sungguhan, bukan sekadar tukar bidak biasa
+    // (deteksi versi lama kecolongan di sini: tukar gajah biasa pun kebaca brilian).
+    if (gap >= 60 && see <= -120) return { tier: 'brilliant', label: 'Brilian', chip: '💎' };
+    if (gap >= 180) return { tier: 'great', label: 'Hebat', chip: '⭐' };
+    return { tier: 'best', label: 'Terbaik', chip: '✓' };
   }
-  if(loss<45) return {tier:'good', label:'Baik', chip:'✓'};
-  if(loss<110) return {tier:'inacc', label:'Kurang Tepat', chip:'?!'};
-  if(loss<260) return {tier:'mistake', label:'Salah', chip:'?'};
-  return {tier:'blunder', label:'BAD', chip:'??'};
+  if (loss < 45) return { tier: 'good', label: 'Baik', chip: '✓' };
+  if (loss < 110) return { tier: 'inacc', label: 'Kurang Tepat', chip: '?!' };
+  if (loss < 260) return { tier: 'mistake', label: 'Salah', chip: '?' };
+  return { tier: 'blunder', label: 'BAD', chip: '??' };
+}
+
+/**
+ * Nilai satu langkah yang BARU dimainkan — ini yang dipakai buat badge kualitas
+ * langkah pemain.
+ *
+ * Caranya beda (dan jauh lebih akurat) daripada sekadar melihat peringkat
+ * langkah di daftar hasil search: posisi sebelum langkah dicari sampai
+ * kedalaman D, lalu posisi SESUDAH langkah dicari lagi sampai kedalaman yang
+ * sama dengan jendela penuh. Dua angka dari kedalaman yang sama, jadi
+ * "kerugian"-nya beneran berarti.
+ *
+ * @param {string} fenBefore posisi sebelum langkah
+ * @param {object} move      {from, to, promotion}
+ * @param {object} [opts]    { plyNumber, maxDepth, budgetMs, sanHistoryBefore }
+ */
+function gradePlayedMove(fenBefore, move, opts) {
+  opts = opts || {};
+  const plyNumber = opts.plyNumber || 0;
+  if (plyNumber <= 6) return { tag: BOOK_TAG, loss: 0, depth: 0, bestScore: 0, playedScore: 0, best: null };
+
+  const maxDepth = opts.maxDepth || 64;
+  const budgetMs = opts.budgetMs == null ? 300 : opts.budgetMs;
+
+  const pos = newPosition(fenBefore, opts.sanHistoryBefore);
+  const res = searcher.searchRoot(pos, {
+    maxDepth, budgetMs, gradeAll: true, classMargin: 320,
+    // Jangan pakai plafon waktu bawaan di sini: kedalamannya sudah tetap, dan
+    // badge kualitas langkah harus bisa diulang — langkah yang sama mesti dapat
+    // badge yang sama, bukan berubah gara-gara servernya pas lebih sibuk.
+    gradeBudgetMs: budgetMs,
+  });
+  if (!res.best) return { tag: { tier: 'good', label: 'Baik', chip: '✓' }, loss: 0, depth: 0, bestScore: 0, playedScore: 0, best: null };
+
+  const wantUci = move.from + move.to + (move.promotion || '');
+  const isBest = uciOf(res.best) === wantUci;
+  const bestVerbose = mapToVerbose(fenBefore, [res.best])[0] || null;
+  let loss = 0, gap = 0, playedScore = res.score;
+
+  if (isBest) {
+    const second = res.rootMoves.length > 1 ? res.rootMoves[1].score : res.score;
+    gap = res.score - second;
+  } else {
+    const pos2 = newPosition(fenBefore, opts.sanHistoryBefore);
+    const m = internalMoveOf(pos2, move);
+    if (m && pos2.makeMove(m)) {
+      const childDepth = Math.max(1, res.depth - 1);
+      const r2 = searcher.searchRoot(pos2, {
+        maxDepth: childDepth, budgetMs: Math.max(80, budgetMs), gradeAll: false,
+      });
+      pos2.unmakeMove();
+      playedScore = -r2.score;
+    } else {
+      // langkahnya nggak ketemu (seharusnya nggak kejadian) — pakai daftar hasil search
+      const row = res.rootMoves.find(r => uciOf(r.move) === wantUci);
+      playedScore = row ? row.score : res.score;
+    }
+    loss = res.score - playedScore;
+    if (loss < 0) loss = 0;
+  }
+
+  const see = isBest ? seeOfMove(fenBefore, move) : 0;
+  return {
+    tag: qualityFromLoss(loss, isBest, gap, see),
+    loss, gap, isBest, see,
+    bestScore: res.score, playedScore,
+    best: bestVerbose,
+    depth: res.depth,
+    mate: res.mate,
+  };
+}
+
+// Klasifikasi dari daftar hasil search (dipakai buat langkah bot sendiri, yang
+// daftar skornya sudah ada dari pencarian yang sama).
+function classifyMove(scored, playedIdx, plyNumber, fenBefore) {
+  if (plyNumber <= 6) return BOOK_TAG;
+  if (!scored || !scored.length) return { tier: 'good', label: 'Baik', chip: '✓' };
+  if (playedIdx < 0 || playedIdx >= scored.length) playedIdx = scored.length - 1;
+  const best = scored[0].s;
+  const isBest = playedIdx === 0;
+  const loss = best - scored[playedIdx].s;
+  const gap = isBest ? best - (scored.length > 1 ? scored[1].s : best) : 0;
+  const see = (isBest && fenBefore) ? seeOfMove(fenBefore, scored[0].m) : 0;
+  return qualityFromLoss(loss, isBest, gap, see);
 }
 
 // ---------------- buku pembukaan ----------------
 // history: array SAN dari langkah pertama, misal ['e4','e5','Nf3']
-function detectOpening(history){
+function detectOpening(history) {
   let bestMatch = null;
-  for(const entry of OPENINGS){
-    if(entry.moves.length > history.length) continue;
+  for (const entry of OPENINGS) {
+    if (entry.moves.length > history.length) continue;
     let match = true;
-    for(let i=0;i<entry.moves.length;i++){ if(entry.moves[i] !== history[i]){ match=false; break; } }
-    if(match && (!bestMatch || entry.moves.length > bestMatch.moves.length)) bestMatch = entry;
+    for (let i = 0; i < entry.moves.length; i++) { if (entry.moves[i] !== history[i]) { match = false; break; } }
+    if (match && (!bestMatch || entry.moves.length > bestMatch.moves.length)) bestMatch = entry;
   }
   return bestMatch ? { eco: bestMatch.eco, name: bestMatch.name, counter: bestMatch.counter } : null;
 }
 
-const BOOK_PLY_LIMIT = 14; // stop consulting the book after this many half-moves
-function bookMove(history){
-  if(history.length >= BOOK_PLY_LIMIT) return null;
+const BOOK_PLY_LIMIT = 14; // berhenti pakai buku setelah sebanyak ini setengah-langkah
+function bookMove(history) {
+  if (history.length >= BOOK_PLY_LIMIT) return null;
   const candidates = [];
-  for(const entry of OPENINGS){
-    if(entry.moves.length <= history.length) continue;
+  for (const entry of OPENINGS) {
+    if (entry.moves.length <= history.length) continue;
     let match = true;
-    for(let i=0;i<history.length;i++){ if(entry.moves[i] !== history[i]){ match=false; break; } }
-    if(match) candidates.push(entry.moves[history.length]);
+    for (let i = 0; i < history.length; i++) { if (entry.moves[i] !== history[i]) { match = false; break; } }
+    if (match) candidates.push(entry.moves[history.length]);
   }
-  if(candidates.length === 0) return null;
-  return candidates[Math.floor(Math.random()*candidates.length)]; // SAN string
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)]; // string SAN
 }
 
 module.exports = {
-  Chess, VAL, absoluteEval, findBestMoves, eloConfig, classifyMove,
-  detectOpening, bookMove, pieceValueOf, BOOK_PLY_LIMIT, OPENINGS
+  Chess, VAL, absoluteEval, evaluate,
+  findBestMoves, analyze, seeOfMove,
+  eloConfig, pickMove, classifyMove, gradePlayedMove, qualityFromLoss,
+  detectOpening, bookMove, pieceValueOf, BOOK_PLY_LIMIT, OPENINGS,
+  MATE, MATE_THRESHOLD,
+  Position, Searcher, searcher,
 };
