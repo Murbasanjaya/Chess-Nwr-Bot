@@ -5,20 +5,40 @@
 const express = require('express');
 const path = require('path');
 const engine = require('./engine/chessEngine.js');
-const { Chess, findBestMoves, eloConfig, classifyMove, detectOpening, bookMove, OPENINGS } = engine;
+const {
+  Chess, findBestMoves, analyze, eloConfig, pickMove, classifyMove, gradePlayedMove,
+  detectOpening, bookMove, OPENINGS, MATE_THRESHOLD,
+} = engine;
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Badge kualitas langkah pakai KEDALAMAN TETAP, bukan jatah waktu tetap: biar
+// langkah yang sama selalu dapat badge yang sama, nggak berubah-ubah cuma gara-gara
+// server-nya pas lebih sibuk atau tabel transposisinya lebih panas.
+const CLASSIFY_DEPTH = 10;
+const CLASSIFY_MS = 900;      // jaring pengaman kalau posisinya luar biasa ramai
+const HINT_DEPTH = 16;
+const HINT_MS = 900;
+
 // ---------- helper: convert a chess.js verbose move object to the small shape the client needs ----------
-function slimMove(m){
+function slimMove(m) {
   return { from: m.from, to: m.to, promotion: m.promotion || null, san: m.san, captured: m.captured || null, flags: m.flags };
+}
+
+// Ringkasan skor buat ditampilkan ke pemain: "+1.5" atau "skakmat 3".
+function scoreText(score, mate) {
+  if (mate !== null && mate !== undefined) {
+    return mate > 0 ? ('skakmat dalam ' + mate) : ('dimat dalam ' + (-mate));
+  }
+  const p = (score / 100).toFixed(2);
+  return (score > 0 ? '+' : '') + p;
 }
 
 // ---------- POST /api/bot-move ----------
 // body: { fen, sanHistory: string[], elo }
-// -> { move: {from,to,promotion,san}, source: 'book'|'engine', tag, opening }
+// -> { move: {from,to,promotion,san}, source: 'book'|'engine', tag, opening, info }
 app.post('/api/bot-move', (req, res) => {
   try {
     const { fen, sanHistory, elo } = req.body;
@@ -48,32 +68,37 @@ app.post('/api/bot-move', (req, res) => {
 
     // 2) kalau tidak ada di buku (atau sudah lewat), hitung sendiri
     const cfg = eloConfig(eloNum);
-    const scored = findBestMoves(fen, cfg.maxDepth, cfg.budget);
+    const scored = findBestMoves(fen, cfg.maxDepth, cfg.budget, {
+      sanHistory: history,
+      // Level bawah butuh skor semua langkah dengan resolusi lebar (biar
+      // "kesalahan manusiawi"-nya bisa dipilih dengan terukur) — dan itu murah
+      // karena kedalamannya kecil. Level atas cuma butuh cukup buat badge.
+      classMargin: cfg.blunder > 0 ? 700 : 240,
+    });
     if (!scored || scored.length === 0) return res.status(400).json({ error: 'tidak ada langkah legal' });
 
-    let chosenIdx;
-    const forcedMateFound = scored[0].s > 50000;
-    if (forcedMateFound) {
-      chosenIdx = 0; // jangan pernah acak-acak skakmat yang sudah ketemu
-    } else if (Math.random() < cfg.blunder) {
-      const worseStart = Math.max(1, Math.ceil(scored.length / 2));
-      const pool = scored.slice(worseStart);
-      chosenIdx = pool.length ? worseStart + Math.floor(Math.random() * pool.length) : scored.length - 1;
-    } else {
-      const topN = Math.min(cfg.top, scored.length);
-      chosenIdx = Math.floor(Math.random() * topN);
-    }
+    const chosenIdx = pickMove(scored, cfg);
     const chosen = scored[chosenIdx].m;
     const plyNumber = history.length + 1;
-    const tag = classifyMove(scored, chosenIdx, plyNumber);
+    const tag = classifyMove(scored, chosenIdx, plyNumber, fen);
     game.move(chosen);
 
+    const info = scored.info || {};
     res.json({
       move: slimMove(chosen),
       source: 'engine',
-      depthReached: cfg.maxDepth,
+      depthReached: info.depth || cfg.maxDepth,
       tag,
-      opening: detectOpening(history.concat([chosen.san])) || opening
+      opening: detectOpening(history.concat([chosen.san])) || opening,
+      info: {
+        depth: info.depth, seldepth: info.seldepth, nodes: info.nodes,
+        nps: info.nps, timeMs: info.timeMs,
+        score: scored[chosenIdx].s,
+        scoreText: scoreText(scored[chosenIdx].s, info.mate),
+        mate: info.mate,
+        level: cfg.tag,
+        forcedMate: scored[0].s >= MATE_THRESHOLD,
+      },
     });
   } catch (err) {
     console.error(err);
@@ -83,19 +108,26 @@ app.post('/api/bot-move', (req, res) => {
 
 // ---------- POST /api/classify ----------
 // body: { fenBefore, move: {from,to,promotion}, sanHistory (SUDAH termasuk langkah ini) }
-// -> { tag, opening }
+// -> { tag, opening, loss, bestMove }
 app.post('/api/classify', (req, res) => {
   try {
     const { fenBefore, move, sanHistory } = req.body;
     if (!fenBefore || !move) return res.status(400).json({ error: 'fenBefore & move wajib diisi' });
     const history = Array.isArray(sanHistory) ? sanHistory : [];
-    const scored = findBestMoves(fenBefore, 3, 200);
-    let tag = { tier: 'good', label: '', chip: '' };
-    if (scored && scored.length) {
-      const idx = scored.findIndex(s => s.m.from === move.from && s.m.to === move.to && (s.m.promotion||null) === (move.promotion||null));
-      tag = classifyMove(scored, idx < 0 ? scored.length - 1 : idx, history.length);
-    }
-    res.json({ tag, opening: detectOpening(history) });
+    const graded = gradePlayedMove(fenBefore, move, {
+      plyNumber: history.length,
+      maxDepth: CLASSIFY_DEPTH,
+      budgetMs: CLASSIFY_MS,
+      sanHistoryBefore: history.slice(0, -1), // riwayat SEBELUM langkah ini
+    });
+    res.json({
+      tag: graded.tag,
+      opening: detectOpening(history),
+      loss: graded.loss,
+      depth: graded.depth,
+      bestMove: graded.best ? slimMove(graded.best) : null,
+      scoreText: scoreText(graded.bestScore, graded.mate),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal error', detail: String(err && err.message || err) });
@@ -103,20 +135,57 @@ app.post('/api/classify', (req, res) => {
 });
 
 // ---------- POST /api/hint ----------
-// body: { fen }
-// -> { move: {from,to,promotion,san,captured}, text }
+// body: { fen, sanHistory? }
+// -> { move: {from,to,promotion,san,captured}, text, pv, score }
 app.post('/api/hint', (req, res) => {
   try {
-    const { fen } = req.body;
+    const { fen, sanHistory } = req.body;
     if (!fen) return res.status(400).json({ error: 'fen wajib diisi' });
-    const scored = findBestMoves(fen, 4, 700);
-    if (!scored || !scored.length) return res.status(400).json({ error: 'tidak ada langkah legal' });
-    const m = scored[0].m;
+    const r = analyze(fen, {
+      maxDepth: HINT_DEPTH, budgetMs: HINT_MS,
+      sanHistory: Array.isArray(sanHistory) ? sanHistory : undefined,
+    });
+    if (!r.best) return res.status(400).json({ error: 'tidak ada langkah legal' });
+    const m = r.best;
     const PIECE_NAME = { p: 'Pion', n: 'Kuda', b: 'Gajah', r: 'Benteng', q: 'Menteri', k: 'Raja' };
-    let text = 'Saran: ' + PIECE_NAME[m.piece] + ' ' + m.from + ' \u2192 ' + m.to;
+    let text = 'Saran: ' + PIECE_NAME[m.piece] + ' ' + m.from + ' → ' + m.to;
     if (m.captured) text += ' (makan ' + PIECE_NAME[m.captured] + ')';
     if (m.flags.indexOf('p') !== -1) text += ' (promosi Menteri)';
-    res.json({ move: slimMove(m), text });
+    if (r.mate !== null && r.mate > 0) text += ' \u2014 skakmat dalam ' + r.mate + '!';
+    else if (r.mate !== null) text += ' \u2014 bertahan, dimat dalam ' + (-r.mate);
+    else {
+      text += ' \u00b7 taksiran ' + scoreText(r.score, null);
+      if (r.depth) text += ' \u00b7 dihitung ' + r.depth + ' langkah ke depan';
+    }
+    res.json({
+      move: slimMove(m), text,
+      pv: r.pv, score: r.score, scoreText: scoreText(r.score, r.mate),
+      mate: r.mate, depth: r.depth, nodes: r.nodes, nps: r.nps,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal error', detail: String(err && err.message || err) });
+  }
+});
+
+// ---------- POST /api/analyze ----------
+// Analisis lebih dalam buat satu posisi: skor, kedalaman, jalur utama (PV).
+// body: { fen, sanHistory?, depth?, ms? }
+app.post('/api/analyze', (req, res) => {
+  try {
+    const { fen, sanHistory, depth, ms } = req.body;
+    if (!fen) return res.status(400).json({ error: 'fen wajib diisi' });
+    const r = analyze(fen, {
+      maxDepth: Math.max(1, Math.min(parseInt(depth, 10) || 20, 48)),
+      budgetMs: Math.max(50, Math.min(parseInt(ms, 10) || 2000, 10000)),
+      sanHistory: Array.isArray(sanHistory) ? sanHistory : undefined,
+    });
+    res.json({
+      best: r.best ? slimMove(r.best) : null,
+      score: r.score, scoreText: scoreText(r.score, r.mate), mate: r.mate,
+      depth: r.depth, seldepth: r.seldepth, nodes: r.nodes, nps: r.nps, timeMs: r.timeMs,
+      pv: r.pv, staticEval: r.eval,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal error', detail: String(err && err.message || err) });

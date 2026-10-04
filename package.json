@@ -1,10 +1,15 @@
 {
   "name": "catur-kayu-node",
   "version": "1.0.0",
-  "description": "Catur Kayu — web catur full Node.js/Express dengan AI catur buatan sendiri (bukan Stockfish), buku 150+ pembukaan, dan mode saran.",
+  "description": "Catur Kayu — web catur full Node.js/Express dengan engine catur buatan sendiri (bukan Stockfish): board 0x88, Zobrist hashing, evaluasi tapered, negamax + alpha-beta + null-move + LMR + quiescence, buku 150+ pembukaan, dan mode saran.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test/perft.js && node test/sanity.js",
+    "test:perft": "node test/perft.js",
+    "test:sanity": "node test/sanity.js",
+    "test:match": "node test/match.js",
+    "bench": "node test/bench.js"
   },
   "dependencies": {
     "express": "^4.19.2",
