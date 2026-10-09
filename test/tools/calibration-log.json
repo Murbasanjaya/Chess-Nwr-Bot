@@ -1,4 +1,30 @@
 {
+ "0": [
+  {
+   "anchorElo": 1260,
+   "anchorType": "ours",
+   "anchor": "engine s=0.1 (~1260)",
+   "w": 2,
+   "d": 2,
+   "l": 56
+  },
+  {
+   "anchorElo": 1260,
+   "anchorType": "ours",
+   "anchor": "engine s=0.1 (~1260)",
+   "w": 5,
+   "d": 1,
+   "l": 54
+  },
+  {
+   "anchorElo": 1260,
+   "anchorType": "ours",
+   "anchor": "engine s=0.1 (~1260)",
+   "w": 2,
+   "d": 2,
+   "l": 56
+  }
+ ],
  "1": [
   {
    "anchorElo": 2200,
@@ -55,6 +81,54 @@
    "w": 16,
    "d": 6,
    "l": 38
+  }
+ ],
+ "0.25": [
+  {
+   "anchorElo": 1690,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 1690",
+   "w": 6,
+   "d": 1,
+   "l": 53
+  },
+  {
+   "anchorElo": 1886,
+   "anchorType": "ours",
+   "anchor": "engine s=0.4 (~1886)",
+   "w": 4,
+   "d": 10,
+   "l": 46
+  }
+ ],
+ "0.1": [
+  {
+   "anchorElo": 1436,
+   "anchorType": "ours",
+   "anchor": "engine s=0.25 (~1436)",
+   "w": 13,
+   "d": 6,
+   "l": 41
+  }
+ ],
+ "-0.25": [
+  {
+   "anchorElo": 794,
+   "anchorType": "ours",
+   "anchor": "engine s=0 (~794)",
+   "w": 16,
+   "d": 1,
+   "l": 43
+  }
+ ],
+ "-0.5": [
+  {
+   "anchorElo": 626,
+   "anchorType": "ours",
+   "anchor": "engine s=-0.25 (~626)",
+   "w": 12,
+   "d": 6,
+   "l": 42
   }
  ]
 }

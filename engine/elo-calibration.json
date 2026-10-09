@@ -5,77 +5,75 @@
  "points": [
   {
    "s": -0.5,
-   "elo": 337,
-   "lo": 138,
-   "hi": 537,
-   "games": 120,
+   "elo": 435,
+   "lo": 221,
+   "hi": 649,
+   "games": 60,
    "anchors": [
-    "engine s=-0.25 (~592) (7M 3S 50K)",
-    "engine s=-0.25 (~592) (13M 2S 45K)"
+    "engine s=-0.25 (~626) (12M 6S 42K)"
    ]
   },
   {
    "s": -0.25,
-   "elo": 592,
-   "lo": 408,
-   "hi": 776,
-   "games": 180,
+   "elo": 626,
+   "lo": 434,
+   "hi": 818,
+   "games": 60,
    "anchors": [
-    "engine s=0 (~963) (7M 3S 50K)",
-    "engine s=0 (~963) (5M 3S 52K)",
-    "engine s=0 (~963) (3M 2S 55K)"
+    "engine s=0 (~794) (16M 1S 43K)"
    ]
   },
   {
    "s": 0,
-   "elo": 963,
-   "lo": 797,
-   "hi": 1130,
-   "games": 60,
+   "elo": 794,
+   "lo": 628,
+   "hi": 959,
+   "games": 180,
    "anchors": [
-    "engine s=0.1 (~1223) (9M 4S 47K)"
+    "engine s=0.1 (~1260) (2M 2S 56K)",
+    "engine s=0.1 (~1260) (5M 1S 54K)",
+    "engine s=0.1 (~1260) (2M 2S 56K)"
    ]
   },
   {
    "s": 0.1,
-   "elo": 1223,
-   "lo": 1096,
-   "hi": 1351,
+   "elo": 1260,
+   "lo": 1127,
+   "hi": 1394,
    "games": 60,
    "anchors": [
-    "engine s=0.25 (~1399) (16M 0S 44K)"
+    "engine s=0.25 (~1436) (13M 6S 41K)"
    ]
   },
   {
    "s": 0.25,
-   "elo": 1399,
-   "lo": 1319,
-   "hi": 1480,
-   "games": 180,
+   "elo": 1436,
+   "lo": 1340,
+   "hi": 1533,
+   "games": 120,
    "anchors": [
-    "Stockfish UCI_Elo 1730 (4M 4S 52K)",
-    "engine s=0.4 (~1926) (4M 1S 55K)",
-    "Stockfish UCI_Elo 1400 (28M 4S 28K)"
+    "Stockfish UCI_Elo 1690 (6M 1S 53K)",
+    "engine s=0.4 (~1886) (4M 10S 46K)"
    ]
   },
   {
    "s": 0.4,
-   "elo": 1926,
-   "lo": 1844,
-   "hi": 2009,
+   "elo": 1886,
+   "lo": 1798,
+   "hi": 1975,
    "games": 60,
    "anchors": [
-    "Stockfish UCI_Elo 2060 (13M 12S 35K)"
+    "Stockfish UCI_Elo 2020 (16M 6S 38K)"
    ]
   },
   {
    "s": 0.55,
-   "elo": 2262,
-   "lo": 2181,
-   "hi": 2342,
+   "elo": 2221,
+   "lo": 2140,
+   "hi": 2302,
    "games": 60,
    "anchors": [
-    "Stockfish UCI_Elo 2250 (26M 10S 24K)"
+    "Stockfish UCI_Elo 2250 (23M 9S 28K)"
    ]
   },
   {

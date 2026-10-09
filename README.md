@@ -21,7 +21,7 @@ yang dibatasi kekuatannya lewat opsi resmi `UCI_Elo`.
 | | |
 |---|---|
 | **Level maksimal** (500.000 node/langkah, ~1 detik) | **~2713 Elo** (95%: 2642–2785, dari 120 partai) |
-| Rentang level yang tersedia di slider | 350 – 2700 |
+| Rentang level yang tersedia di slider | 450 – 2700 |
 | Skala | UCI_Elo Stockfish 19 (skala yang dikalibrasi tim Stockfish ke daftar CCRL) — BUKAN rating FIDE/chess.com/lichess |
 | Diukur | 2026-10-09 |
 
@@ -106,13 +106,13 @@ terukur (`GET /api/levels`), dan angka di antara titik ukur diinterpolasi.
 | 1.00 | 500.000 | 0 cp | 0.0% | **2713** | 2642–2785 | 120 | Stockfish UCI_Elo 2200 (50M 8S 2K); Stockfish UCI_Elo 2580 (34M 20S 6K) |
 | 0.85 | 148.094 | 2 cp | 0.0% | **2586** | 2515–2658 | 60 | Stockfish UCI_Elo 2510 (26M 21S 13K) |
 | 0.70 | 43.864 | 23 cp | 0.0% | **2454** | 2385–2524 | 60 | Stockfish UCI_Elo 2390 (24M 23S 13K) |
-| 0.55 | 12.992 | 60 cp | 0.0% | **2262** | 2181–2342 | 60 | Stockfish UCI_Elo 2250 (26M 10S 24K) |
-| 0.40 | 3.848 | 110 cp | 2.2% | **1926** | 1844–2009 | 60 | Stockfish UCI_Elo 2060 (13M 12S 35K) |
-| 0.25 | 1.140 | 173 cp | 8.8% | **1399** | 1319–1480 | 180 | Stockfish UCI_Elo 1730 (4M 4S 52K); engine s=0.4 (~1926) (4M 1S 55K); Stockfish UCI_Elo 1400 (28M 4S 28K) |
-| 0.10 | 338 | 246 cp | 17.9% | **1223** | 1096–1351 | 60 | engine s=0.25 (~1399) (16M 0S 44K) |
-| 0.00 | 150 | 300 cp | 25.0% | **963** | 797–1130 | 60 | engine s=0.1 (~1223) (9M 4S 47K) |
-| -0.25 | 150 | 500 cp | 40.0% | **592** | 408–776 | 180 | engine s=0 (~963) (7M 3S 50K); engine s=0 (~963) (5M 3S 52K); engine s=0 (~963) (3M 2S 55K) |
-| -0.50 | 150 | 700 cp | 55.0% | **337** | 138–537 | 120 | engine s=-0.25 (~592) (7M 3S 50K); engine s=-0.25 (~592) (13M 2S 45K) |
+| 0.55 | 12.992 | 60 cp | 0.0% | **2221** | 2140–2302 | 60 | Stockfish UCI_Elo 2250 (23M 9S 28K) |
+| 0.40 | 3.848 | 110 cp | 2.2% | **1886** | 1798–1975 | 60 | Stockfish UCI_Elo 2020 (16M 6S 38K) |
+| 0.25 | 1.140 | 173 cp | 8.8% | **1436** | 1340–1533 | 120 | Stockfish UCI_Elo 1690 (6M 1S 53K); engine s=0.4 (~1886) (4M 10S 46K) |
+| 0.10 | 338 | 246 cp | 17.9% | **1260** | 1127–1394 | 60 | engine s=0.25 (~1436) (13M 6S 41K) |
+| 0.00 | 150 | 300 cp | 25.0% | **794** | 628–959 | 180 | engine s=0.1 (~1260) (2M 2S 56K); engine s=0.1 (~1260) (5M 1S 54K); engine s=0.1 (~1260) (2M 2S 56K) |
+| -0.25 | 150 | 500 cp | 40.0% | **626** | 434–818 | 60 | engine s=0 (~794) (16M 1S 43K) |
+| -0.50 | 150 | 700 cp | 55.0% | **435** | 221–649 | 60 | engine s=-0.25 (~626) (12M 6S 42K) |
 
 Titik di bawah 1320 (batas bawah `UCI_Elo` Stockfish) diukur melawan titik
 engine ini sendiri yang sudah terkalibrasi (rantai Elo), jadi
