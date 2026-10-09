@@ -175,7 +175,9 @@ for (const [name, fen, maxN] of MATE_FENS) {
     }
   }
   const bestTruth = Math.max(...truth.values());
-  const scored = engine.findBestMoves(fen, DEPTH, 60000, { classMargin: 100000 });
+  // margin raksasa = semua langkah dinilai eksak; jatah penilaian juga harus
+  // longgar, kalau nggak sebagian langkah cuma kebagian batas-atas
+  const scored = engine.findBestMoves(fen, DEPTH, 60000, { classMargin: 100000, gradeBudgetMs: 60000 });
   const key = sc => sc.m.from + sc.m.to + (sc.m.promotion || '');
 
   // a) langkah yang dipilih engine harus memang bagus secara objektif
@@ -246,6 +248,40 @@ for (const [name, fen, maxN] of MATE_FENS) {
   // skornya harus negatif besar buat hitam (bukan 0 alias "aman").
   const r2 = engine.analyze('7k/8/8/8/8/8/8/K6Q b - - 0 1', { maxDepth: 12, budgetMs: 600 });
   check(r2.score < -400, 'raja sendirian vs menteri dinilai kalah', 'skor ' + r2.score);
+}
+
+// ---------------- 6. level Elo ----------------
+{
+  const info = engine.eloInfo();
+  let mono = true, prev = null, detail = '';
+  for (let elo = info.min; elo <= info.max; elo += 50) {
+    const c = engine.eloConfig(elo);
+    if (prev && (c.nodes < prev.nodes || c.noise > prev.noise || c.blunder > prev.blunder)) {
+      mono = false; if (!detail) detail = 'Elo ' + elo + ' lebih lemah dari Elo ' + prev.elo;
+    }
+    prev = c;
+  }
+  check(mono, 'level Elo makin tinggi = makin kuat (monoton)', detail || (info.min + '–' + info.max));
+  check(info.min >= 300 && info.max <= 3200 && info.min < info.max, 'rentang Elo masuk akal',
+    info.min + '–' + info.max + (info.measured ? ' (hasil kalibrasi)' : ' (BELUM dikalibrasi)'));
+  // angka di luar rentang dijepit, bukan dipakai mentah-mentah
+  check(engine.eloConfig(99999).elo === info.max && engine.eloConfig(1).elo === info.min, 'Elo di luar rentang dijepit');
+
+  // Regresi: langkah yang skornya belum dinilai tuntas (exact:false) nggak
+  // boleh pernah terpilih — dulu skor perkiraannya nyaris sama dengan langkah
+  // terbaik, jadi level berderau malah sering blunder (terukur: -500 Elo).
+  const fake = [
+    { m: 'terbaik', s: 50, exact: true },
+    { m: 'belum-dinilai', s: 49, exact: false },
+    { m: 'bagus', s: 30, exact: true },
+    { m: 'blunder-tak-dikenal', s: -200, exact: false },
+  ];
+  let picked = 0;
+  for (let i = 0; i < 2000; i++) {
+    const idx = engine.pickMove(fake, { noise: 300, blunder: 0.5 });
+    if (fake[idx].exact === false) picked++;
+  }
+  check(picked === 0, 'langkah yang belum dinilai tuntas nggak pernah dipilih', picked + ' dari 2000 undian');
 }
 
 console.log('');

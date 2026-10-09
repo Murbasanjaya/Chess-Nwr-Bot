@@ -16,6 +16,8 @@
 // pernah masuk ke dalam loop pencarian.
 // ============================================================================
 
+const fs = require('fs');
+const path = require('path');
 const { Chess } = require('chess.js');
 const OPENINGS = require('../data/openings.js');
 const P = require('./position.js');
@@ -105,7 +107,7 @@ function newPosition(fen, sanHistory) {
  * @param {string} fen        posisi
  * @param {number} maxDepth   batas kedalaman (search tetap dibatasi waktu juga)
  * @param {number} budgetMs   jatah waktu mikir
- * @param {object} [opts]     { sanHistory, nodeLimit, classMargin }
+ * @param {object} [opts]     { sanHistory, nodeLimit, classMargin, gradeBudgetMs }
  */
 function findBestMoves(fen, maxDepth, budgetMs, opts) {
   opts = opts || {};
@@ -115,12 +117,14 @@ function findBestMoves(fen, maxDepth, budgetMs, opts) {
     budgetMs: budgetMs == null ? 1500 : budgetMs,
     nodeLimit: opts.nodeLimit,
     classMargin: opts.classMargin,
+    gradeBudgetMs: opts.gradeBudgetMs,
+    gradeNodes: opts.gradeNodes,
   });
   const verbose = mapToVerbose(fen, res.rootMoves.map(r => r.move));
   const scored = [];
   for (let i = 0; i < res.rootMoves.length; i++) {
     if (!verbose[i]) continue; // seharusnya nggak kejadian; aman-aman saja
-    scored.push({ m: verbose[i], s: res.rootMoves[i].score });
+    scored.push({ m: verbose[i], s: res.rootMoves[i].score, exact: res.rootMoves[i].exact });
   }
   scored.info = {
     depth: res.depth, seldepth: res.seldepth, nodes: res.nodes,
@@ -190,61 +194,160 @@ function seeOfMove(fen, move) {
 }
 
 // ---------------- level kekuatan (Elo) ----------------
-// Angka depth di sini realistis buat engine baru: depth 8 cuma butuh ~0,5 detik,
-// jadi level atas bisa mikir 14–30 langkah ke depan dalam waktu 1–3 detik.
+// Kekuatan bot diatur lewat SATU angka kontinu s (0 = paling lemah, 1 = penuh):
 //
-//   maxDepth : batas kedalaman
-//   budget   : jatah waktu (ms) — ini yang biasanya jadi penentu
-//   blunder  : peluang sengaja main langkah jelek (biar level bawah manusiawi)
-//   top      : ambil acak dari N langkah terbaik
-//   noise    : toleransi centipawn — langkah yang selisihnya di bawah ini
-//              dianggap "sama bagus" dan boleh dipilih acak
+//   nodes   : batas jumlah posisi yang boleh dihitung per langkah. Sengaja
+//             pakai node, BUKAN waktu: dengan batas waktu, bot di HP lambat
+//             jadi jauh lebih lemah daripada di server kencang, dan angka Elo
+//             apa pun jadi nggak bermakna. Dengan node, kekuatannya sama di
+//             semua perangkat (yang beda cuma lama mikirnya).
+//   noise   : "derau" pemilihan langkah (centipawn). Langkah yang selisihnya
+//             dengan langkah terbaik masih di dalam derau ini bisa terpilih.
+//   blunder : peluang sengaja bikin kesalahan "manusiawi" (rugi 1-4 pion).
+//
+// Hubungan s <-> Elo TIDAK ditebak: diukur lewat ratusan partai melawan
+// Stockfish yang dibatasi Elo-nya (UCI_Elo resmi, skala ~CCRL), lalu disimpan
+// di engine/elo-calibration.json oleh test/tools/calibrate.js.
+const MAX_NODES = 500000;
+const MIN_NODES = 150;
+
+// s negatif (sampai S_MIN) = level ekstra lemah buat pemula: node tetap minimum,
+// derau & peluang blunder dinaikkan. Rumus buat s >= 0 sengaja nggak diubah
+// supaya titik-titik yang sudah dikalibrasi tetap berlaku.
+const S_MIN = -0.5;
+
+function strengthParams(s) {
+  s = Math.max(S_MIN, Math.min(1, s));
+  const nodes = Math.round(MIN_NODES * Math.pow(MAX_NODES / MIN_NODES, Math.max(0, s)));
+  let noise = s >= 0.9 ? 0 : Math.round(300 * Math.pow((0.9 - s) / 0.9, 1.7));
+  let blunder = s >= 0.5 ? 0 : +(0.25 * Math.pow((0.5 - s) / 0.5, 1.5)).toFixed(4);
+  if (s < 0) {
+    const t = s / S_MIN; // 0..1
+    noise = Math.round(300 + 400 * t);
+    blunder = +(0.25 + 0.30 * t).toFixed(4);
+  }
+  return {
+    s, nodes, noise, blunder,
+    maxDepth: 64,
+    // batas waktu cuma jaring pengaman (HP yang sangat lambat); penentunya node
+    // (asumsi perangkat paling lambat ~30rb node/detik)
+    budget: Math.round(Math.min(8000, Math.max(250, nodes / 30))),
+    // resolusi penilaian langkah harus mencakup rentang derau
+    classMargin: Math.max(240, 2 * noise + 150),
+  };
+}
+
+const CALIBRATION_FILE = path.join(__dirname, 'elo-calibration.json');
+// Titik cadangan kalau file kalibrasi belum ada (perkiraan kasar, bukan hasil ukur).
+let CALIBRATION = { measured: false, points: [{ s: 0, elo: 700 }, { s: 1, elo: 2300 }] };
+try {
+  const c = JSON.parse(fs.readFileSync(CALIBRATION_FILE, 'utf8'));
+  if (Array.isArray(c.points) && c.points.length >= 2) CALIBRATION = Object.assign({ measured: true }, c);
+} catch (e) { /* belum dikalibrasi: pakai cadangan */ }
+// pastikan monoton naik (s naik -> Elo naik), buat interpolasi balik yang aman
+CALIBRATION.points.sort((a, b) => a.s - b.s);
+for (let i = 1; i < CALIBRATION.points.length; i++) {
+  if (CALIBRATION.points[i].elo <= CALIBRATION.points[i - 1].elo) CALIBRATION.points[i].elo = CALIBRATION.points[i - 1].elo + 1;
+}
+const ELO_MIN = Math.ceil(CALIBRATION.points[0].elo / 50) * 50;
+const ELO_MAX = Math.floor(CALIBRATION.points[CALIBRATION.points.length - 1].elo / 50) * 50;
+
+function strengthForElo(elo) {
+  const pts = CALIBRATION.points;
+  if (elo <= pts[0].elo) return pts[0].s;
+  for (let i = 1; i < pts.length; i++) {
+    if (elo <= pts[i].elo) {
+      const a = pts[i - 1], b = pts[i];
+      return a.s + (b.s - a.s) * (elo - a.elo) / (b.elo - a.elo);
+    }
+  }
+  return pts[pts.length - 1].s;
+}
+
+const ELO_BANDS = [
+  [1000, 'Pemula — sering membiarkan bidak dimakan'],
+  [1300, 'Santai — taktik sederhana kadang terlewat'],
+  [1600, 'Menengah — jarang blunder, masih kecolongan taktik'],
+  [1900, 'Kuat — menghitung kombinasi pendek dengan rapi'],
+  [2200, 'Ahli — jeli baca kombinasi, main posisional'],
+  [2500, 'Master — sangat sulit dikalahkan manusia'],
+  [null, 'Maksimal — kekuatan penuh engine ini'],
+];
+function eloTag(elo) {
+  for (const [below, tag] of ELO_BANDS) if (below === null || elo < below) return tag;
+  return '';
+}
+
 function eloConfig(elo) {
-  if (elo < 700)  return { maxDepth: 2,  budget: 60,   blunder: .42,  top: 6, noise: 220, tag: 'Pemula — asal jalan, sering blunder' };
-  if (elo < 1000) return { maxDepth: 3,  budget: 100,  blunder: .26,  top: 5, noise: 150, tag: 'Santai — mikir sebentar, kadang meleset' };
-  if (elo < 1300) return { maxDepth: 5,  budget: 160,  blunder: .15,  top: 4, noise: 90,  tag: 'Menengah — sesekali meleset' };
-  if (elo < 1600) return { maxDepth: 7,  budget: 260,  blunder: .075, top: 3, noise: 55,  tag: 'Cukup kuat — jarang blunder' };
-  if (elo < 1900) return { maxDepth: 9,  budget: 420,  blunder: .035, top: 2, noise: 35,  tag: 'Kuat — menghitung taktik beberapa langkah' };
-  if (elo < 2200) return { maxDepth: 11, budget: 700,  blunder: .012, top: 2, noise: 22,  tag: 'Ahli — jeli baca kombinasi' };
-  if (elo < 2600) return { maxDepth: 14, budget: 1100, blunder: 0,    top: 1, noise: 12,  tag: 'Master — mengincar celah taktik & kombinasi menang' };
-  if (elo < 3200) return { maxDepth: 18, budget: 1600, blunder: 0,    top: 1, noise: 6,   tag: 'Grandmaster — menghitung dalam, memburu skakmat' };
-  if (elo < 4000) return { maxDepth: 24, budget: 2200, blunder: 0,    top: 1, noise: 0,   tag: 'Super GM — sangat sulit dikalahkan' };
-  return { maxDepth: 48, budget: 3000, blunder: 0, top: 1, noise: 0, tag: 'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah' };
+  const e = Math.max(ELO_MIN, Math.min(ELO_MAX, Number(elo) || 1200));
+  const p = strengthParams(strengthForElo(e));
+  return Object.assign(p, { elo: e, tag: eloTag(e) });
+}
+
+function eloInfo() {
+  return {
+    min: ELO_MIN, max: ELO_MAX, step: 50,
+    measured: !!CALIBRATION.measured,
+    scale: CALIBRATION.scale || null,
+    date: CALIBRATION.date || null,
+    bands: ELO_BANDS.map(([below, tag]) => ({ below, tag })),
+  };
+}
+
+/** Cari & pilih langkah bot untuk satu level (cfg dari eloConfig/strengthParams). */
+function botSearch(fen, cfg, sanHistory) {
+  const scored = findBestMoves(fen, cfg.maxDepth, cfg.budget, {
+    sanHistory, nodeLimit: cfg.nodes, classMargin: cfg.classMargin,
+    // Penilaian langkah lain juga dibatasi node (bukan waktu) supaya level
+    // yang butuh skor semua langkah (derau/blunder) tetap sama kuatnya di
+    // perangkat apa pun. Level tanpa derau cuma butuh skor itu buat badge,
+    // jadi jatahnya kecil — bot jadi lebih cepat jalan.
+    gradeBudgetMs: cfg.budget,
+    gradeNodes: (cfg.noise > 0 || cfg.blunder > 0) ? cfg.nodes : Math.min(cfg.nodes, 40000),
+  });
+  const idx = pickMove(scored, cfg);
+  return { scored, idx };
 }
 
 /**
  * Pilih langkah dari daftar hasil search sesuai level.
  *
- * Bedanya dengan versi lama: kalau level bawah "salah langkah", dia nggak
- * langsung ambil langkah terburuk di papan (itu kelihatan aneh/nggak manusiawi),
- * tapi langkah yang rugi sekitar 1–4 bidak — tipe kesalahan yang beneran
- * dilakukan pemain. Skakmat paksa tetap selalu dimainkan.
+ *  - Skakmat paksa selalu dimainkan.
+ *  - Dengan peluang `blunder`: kesalahan "manusiawi" — langkah yang rugi
+ *    sekitar 1–5 pion (bukan langkah terburuk di papan, itu nggak natural).
+ *  - Selain itu: tiap langkah dapat skor + derau acak (0..noise), yang
+ *    tertinggi dipilih. Langkah yang jauh lebih jelek dari derau nggak pernah
+ *    terpilih; makin kecil derau, makin sering langkah terbaik yang keluar.
  */
 function pickMove(scored, cfg) {
   if (!scored || scored.length === 0) return -1;
   if (scored.length === 1) return 0;
-  if (scored[0].s >= MATE_THRESHOLD) return 0;      // skakmat ketemu: jangan main-main
-  if (scored[0].s <= -MATE_THRESHOLD) return 0;     // sudah kalah paksa: ambil yang paling lama
+  if (scored[0].s >= MATE_THRESHOLD) return 0;
+  if (scored[0].s <= -MATE_THRESHOLD) return 0;
+  const best = scored[0].s;
 
   if (cfg.blunder > 0 && Math.random() < cfg.blunder) {
-    // kesalahan "manusiawi": rugi 80–450 cp kalau ada pilihan seperti itu
-    const best = scored[0].s;
     const pool = [];
     for (let i = 1; i < scored.length; i++) {
+      if (scored[i].exact === false) continue; // ruginya belum diketahui
       const loss = best - scored[i].s;
-      if (loss >= 80 && loss <= 450) pool.push(i);
+      if (loss >= 100 && loss <= 500) pool.push(i);
     }
     if (pool.length) return pool[Math.floor(Math.random() * pool.length)];
-    // nggak ada pilihan "agak jelek": ambil dari paruh bawah
-    const start = Math.max(1, Math.ceil(scored.length / 2));
-    return Math.min(scored.length - 1, start + Math.floor(Math.random() * Math.max(1, scored.length - start)));
   }
 
-  // langkah-langkah yang praktis sama bagusnya: pilih acak biar nggak monoton
-  const limit = Math.max(1, Math.min(cfg.top || 1, scored.length));
-  let n = 1;
-  while (n < limit && scored[0].s - scored[n].s <= (cfg.noise || 0)) n++;
-  return Math.floor(Math.random() * n);
+  const noise = cfg.noise || 0;
+  if (noise <= 0) return 0;
+  let bi = 0, bv = -Infinity;
+  for (let i = 0; i < scored.length; i++) {
+    if (best - scored[i].s > noise) break; // daftar terurut: sisanya pasti kalah
+    // Langkah yang belum sempat dinilai tuntas nggak boleh ikut diundi:
+    // skornya cuma perkiraan kasar dan bisa menyembunyikan blunder.
+    if (scored[i].exact === false) continue;
+    const v = scored[i].s + noise * Math.random();
+    if (v > bv) { bv = v; bi = i; }
+  }
+  return bi;
 }
 
 // ---------------- klasifikasi kualitas langkah ----------------
@@ -307,8 +410,8 @@ function gradePlayedMove(fenBefore, move, opts) {
   let loss = 0, gap = 0, playedScore = res.score;
 
   if (isBest) {
-    const second = res.rootMoves.length > 1 ? res.rootMoves[1].score : res.score;
-    gap = res.score - second;
+    const second = res.rootMoves.find((r, i) => i > 0 && r.exact);
+    gap = second ? res.score - second.score : 0;
   } else {
     const pos2 = newPosition(fenBefore, opts.sanHistoryBefore);
     const m = internalMoveOf(pos2, move);
@@ -348,7 +451,8 @@ function classifyMove(scored, playedIdx, plyNumber, fenBefore) {
   const best = scored[0].s;
   const isBest = playedIdx === 0;
   const loss = best - scored[playedIdx].s;
-  const gap = isBest ? best - (scored.length > 1 ? scored[1].s : best) : 0;
+  const second = scored.find((x, i) => i > 0 && x.exact !== false);
+  const gap = isBest ? (second ? best - second.s : 0) : 0;
   const see = (isBest && fenBefore) ? seeOfMove(fenBefore, scored[0].m) : 0;
   return qualityFromLoss(loss, isBest, gap, see);
 }
@@ -383,7 +487,8 @@ function bookMove(history) {
 module.exports = {
   Chess, VAL, absoluteEval, evaluate,
   findBestMoves, analyze, seeOfMove,
-  eloConfig, pickMove, classifyMove, gradePlayedMove, qualityFromLoss,
+  eloConfig, eloInfo, strengthParams, botSearch, strengthForElo, pickMove, classifyMove, gradePlayedMove, qualityFromLoss,
+  ELO_MIN, ELO_MAX, CALIBRATION_FILE,
   detectOpening, bookMove, pieceValueOf, BOOK_PLY_LIMIT, OPENINGS,
   MATE, MATE_THRESHOLD,
   Position, Searcher, searcher,

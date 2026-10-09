@@ -1,0 +1,60 @@
+{
+ "1": [
+  {
+   "anchorElo": 2200,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2200",
+   "w": 50,
+   "d": 8,
+   "l": 2
+  },
+  {
+   "anchorElo": 2580,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2580",
+   "w": 34,
+   "d": 20,
+   "l": 6
+  }
+ ],
+ "0.85": [
+  {
+   "anchorElo": 2510,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2510",
+   "w": 26,
+   "d": 21,
+   "l": 13
+  }
+ ],
+ "0.7": [
+  {
+   "anchorElo": 2390,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2390",
+   "w": 24,
+   "d": 23,
+   "l": 13
+  }
+ ],
+ "0.55": [
+  {
+   "anchorElo": 2250,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2250",
+   "w": 23,
+   "d": 9,
+   "l": 28
+  }
+ ],
+ "0.4": [
+  {
+   "anchorElo": 2020,
+   "anchorType": "sf",
+   "anchor": "Stockfish UCI_Elo 2020",
+   "w": 16,
+   "d": 6,
+   "l": 38
+  }
+ ]
+}

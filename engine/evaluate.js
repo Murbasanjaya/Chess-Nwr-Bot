@@ -2,24 +2,33 @@
 // ============================================================================
 // evaluate.js — fungsi evaluasi posisi (penilaian "siapa yang lebih enak").
 //
-// Versi lama cuma: materi + satu piece-square table + pion dobel/yatim/lolos +
-// pasangan gajah. Versi ini jauh lebih "ngerti catur":
+// Semua bobot evaluasi tinggal di SATU array parameter (W), berpasangan
+// [midgame, endgame]. Ini yang memungkinkan bobotnya di-tuning secara numerik:
+// test/tools/tune.js mencocokkan ratusan bobot ini dengan penilaian Stockfish
+// di ratusan ribu posisi (metode Texel). Stockfish cuma jadi "guru" waktu
+// tuning — engine ini sendiri nggak pernah memanggil Stockfish.
 //
-//   * TAPERED EVAL — tiap bidak punya dua tabel: midgame & endgame, lalu
-//     dicampur sesuai sisa materi di papan. Jadi raja tahu harus sembunyi di
-//     awal permainan, tapi harus maju ke tengah di endgame; pion tahu dia makin
-//     berharga pas bidak lain udah habis.
-//   * Struktur pion lengkap: dobel, yatim, terbelakang, pion lolos (dinilai per
-//     baris + apakah diblokir + jarak raja di endgame), pion bersambung/phalanx.
-//   * Mobilitas tiap bidak (tidak menghitung kotak yang dijaga pion musuh).
-//   * Keamanan raja: tameng pion, file terbuka ke arah raja, dan bobot serangan
-//     musuh ke "zona raja".
-//   * Benteng di file terbuka/semi-terbuka & di baris ke-7, kuda di outpost,
-//     pasangan gajah, bonus tempo.
-//   * Penyesuaian endgame: materi tak cukup buat menang (skala turun) dan
-//     dorongan menggiring raja musuh ke pojok biar skakmat dasar beneran kelar.
+// Isi evaluasinya:
+//   * TAPERED EVAL — tiap fitur punya nilai midgame & endgame yang dicampur
+//     sesuai sisa materi di papan.
+//   * Materi + piece-square table per bidak.
+//   * Struktur pion: dobel, yatim, terbelakang, phalanx & pion dijaga (per
+//     baris), pion lolos (per baris, diblokir/jalan bebas, jarak raja).
+//   * Mobilitas per jumlah kotak (tabel, bukan garis lurus).
+//   * Keamanan raja: tameng pion, file terbuka, bobot serangan ke zona raja.
+//   * Ancaman: bidak diserang pion / bidak yang lebih murah, bidak menggantung.
+//   * Benteng di file terbuka/semi-terbuka & baris ke-7, outpost kuda & gajah,
+//     pasangan gajah, kuda vs jumlah pion, gajah tersumbat pion sendiri, tempo.
+//   * Penyesuaian endgame: materi tak cukup buat menang + menggiring raja
+//     musuh ke pojok biar skakmat dasar beneran kelar.
+//
+// Mode "jejak" (trace): evaluateTrace() mencatat koefisien tiap parameter.
+// Karena evaluasinya linear terhadap W (selain beberapa bagian kecil yang
+// dicatat terpisah), tuner bisa menghitung gradien persis tanpa evaluasi ulang.
 // ============================================================================
 
+const fs = require('fs');
+const path = require('path');
 const P = require('./position.js');
 const {
   PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, WHITE, BLACK,
@@ -27,16 +36,15 @@ const {
   KNIGHT_OFF, BISHOP_OFF, ROOK_OFF, KING_OFF,
 } = P;
 
-// ---------------- nilai materi (midgame / endgame) ----------------
-const MG_VAL = new Int32Array([0, 82, 337, 365, 477, 1025, 0]);
-const EG_VAL = new Int32Array([0, 94, 281, 297, 512, 936, 0]);
 // nilai "rata-rata" yang dipakai di luar eval (ordering, klasifikasi, SEE)
 const VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
 
-// ---------------- piece-square tables ----------------
-// Ditulis seperti papan sungguhan: baris pertama = baris ke-8 (sisi hitam),
-// kolom kiri = file a. Lebih enak dibaca/diedit. Nanti di-flip ke indeks
-// internal (indeks 0 = a1) sama fungsi flip() di bawah.
+// ---------------- nilai awal (sebelum tuning) ----------------
+const MG_VAL = [0, 82, 337, 365, 477, 1025, 0];
+const EG_VAL = [0, 94, 281, 297, 512, 936, 0];
+
+// ---------------- piece-square tables (nilai awal) ----------------
+// Ditulis seperti papan sungguhan: baris pertama = baris ke-8, kolom kiri = file a.
 function flip(vis) {
   const t = new Int32Array(64);
   for (let i = 0; i < 64; i++) t[(7 - (i >> 3)) * 8 + (i & 7)] = vis[i];
@@ -145,54 +153,111 @@ const EG_PST = [null,
          -53, -34, -21, -11, -28, -14, -24, -43]),
 ];
 
-// ---------------- bobot istilah-istilah evaluasi ----------------
+
+// ---------------- registri parameter ----------------
+// Tiap parameter = sepasang angka [mg, eg] di W[2k], W[2k+1]. Indeks k-nya
+// disimpan di konstanta K_* di bawah. Nama dipakai buat menyimpan/memuat hasil
+// tuning (eval-params.json), jadi urutan boleh berubah tanpa merusak file itu.
+const NAMES = [];
+const DEFAULTS = [];
+function def(name, mg, eg) {
+  const k = NAMES.length;
+  NAMES.push(name); DEFAULTS.push(Math.round(mg), Math.round(eg));
+  return k;
+}
+function defArr(name, n, fn) {
+  const base = NAMES.length;
+  for (let i = 0; i < n; i++) { const v = fn(i); def(name + '[' + i + ']', v[0], v[1]); }
+  return base;
+}
+
+const PASSED_MG0 = [0, 2, 6, 18, 36, 66, 110, 0];
+const PASSED_EG0 = [0, 12, 22, 44, 78, 130, 190, 0];
+const SHIELD0 = [0, -2, -14, -26];
+
+const K_MAT = defArr('material', 7, i => [MG_VAL[i], EG_VAL[i]]);
+const K_PST = defArr('pst', 7 * 64, i => {
+  const t = i >> 6, s = i & 63;
+  return t >= 1 && t <= 6 ? [MG_PST[t][s], EG_PST[t][s]] : [0, 0];
+});
+const K_DOUBLED = def('doubled', -11, -28);
+const K_ISOLATED = def('isolated', -14, -16);
+const K_BACKWARD = def('backward', -8, -10);
+const K_PHALANX = defArr('phalanx', 8, () => [6, 4]);
+const K_SUPPORTED = defArr('supported', 8, () => [8, 6]);
+const K_PASSED = defArr('passed', 8, r => [PASSED_MG0[r], PASSED_EG0[r]]);
+const K_PASSED_BLOCKED = defArr('passedBlocked', 8, r => [-PASSED_MG0[r] / 3, -PASSED_EG0[r] / 3]);
+const K_PASSED_FREE = defArr('passedFree', 8, () => [0, 0]);
+const K_PASSED_KDIST = def('passedKingDist', 0, 2);
+const K_BISHOP_PAIR = def('bishopPair', 26, 48);
+const K_ROOK_OPEN = def('rookOpen', 26, 12);
+const K_ROOK_SEMI = def('rookSemiOpen', 12, 6);
+const K_ROOK_7TH = def('rook7th', 14, 28);
+const K_OUTPOST_N = def('outpostKnight', 22, 10);
+const K_OUTPOST_B = def('outpostBishop', 10, 5);
+const K_TEMPO = def('tempo', 14, 6);
+const K_KNIGHT_PAWNS = def('knightPawns', 3, 0);
+const K_BISHOP_BLOCKED = def('bishopBlockedByPawns', -4, -4);
+// mobilitas: tabel per jumlah kotak yang bisa didatangi dengan aman
+const K_MOB = [0, 0,
+  defArr('mobKnight', 9, c => [4 * (c - 4), 4 * (c - 4)]),
+  defArr('mobBishop', 14, c => [4 * (c - 6), 5 * (c - 6)]),
+  defArr('mobRook', 15, c => [3 * (c - 7), 5 * (c - 7)]),
+  defArr('mobQueen', 28, c => [1 * (c - 14), 2 * (c - 14)]),
+];
+const MOB_MAX = [0, 0, 8, 13, 14, 27];
+const K_SHIELD = defArr('kingShield', 4, d => [SHIELD0[d], 0]);
+const K_KING_OPEN = def('kingOpenFile', -22, 0);
+const K_KING_DANGER = def('kingDangerScale', 64, 0); // dibagi 64
+// ancaman (indeks = jenis bidak korban)
+const K_THREAT_PAWN = defArr('threatByPawn', 7, t => (t >= KNIGHT && t <= QUEEN) ? [48, 32] : [0, 0]);
+const K_THREAT_MINOR = defArr('threatByMinor', 7, t => (t >= ROOK && t <= QUEEN) ? [36, 26] : [0, 0]);
+const K_THREAT_ROOK_Q = def('threatRookOnQueen', 36, 26);
+const K_HANGING = defArr('hanging', 7, t => (t >= PAWN && t <= QUEEN) ? [8, 8] : [0, 0]);
+
+const NPARAMS = NAMES.length;
+// Bobot yang aktif dipakai engine. Diisi nilai awal, lalu ditimpa hasil tuning
+// (eval-params.json) kalau file itu ada.
+const W = new Int32Array(NPARAMS * 2);
+for (let i = 0; i < W.length; i++) W[i] = DEFAULTS[i];
+
+function loadParams(obj) {
+  let n = 0;
+  const idx = new Map(NAMES.map((nm, k) => [nm, k]));
+  for (const nm of Object.keys(obj)) {
+    const k = idx.get(nm);
+    if (k === undefined) continue;
+    W[2 * k] = Math.round(obj[nm][0]); W[2 * k + 1] = Math.round(obj[nm][1]);
+    n++;
+  }
+  return n;
+}
+function exportParams(weights) {
+  const w = weights || W, out = {};
+  for (let k = 0; k < NPARAMS; k++) out[NAMES[k]] = [Math.round(w[2 * k]), Math.round(w[2 * k + 1])];
+  return out;
+}
+const PARAMS_FILE = path.join(__dirname, 'eval-params.json');
+if (fs.existsSync(PARAMS_FILE) && !process.env.CATUR_DEFAULT_EVAL) {
+  loadParams(JSON.parse(fs.readFileSync(PARAMS_FILE, 'utf8')));
+}
+
+// ---------------- konstanta struktural (bukan bobot) ----------------
 const PHASE_W = new Int32Array([0, 0, 1, 1, 2, 4, 0]);
 const TOTAL_PHASE = 24;
-
-const DOUBLED_MG = -11, DOUBLED_EG = -28;
-const ISOLATED_MG = -14, ISOLATED_EG = -16;
-const BACKWARD_MG = -8, BACKWARD_EG = -10;
-const PHALANX_MG = 6, PHALANX_EG = 4;
-const SUPPORTED_MG = 8, SUPPORTED_EG = 6;
-// bonus pion lolos per baris (dari sisi pemiliknya; indeks = baris 0..7)
-const PASSED_MG = new Int32Array([0, 2, 6, 18, 36, 66, 110, 0]);
-const PASSED_EG = new Int32Array([0, 12, 22, 44, 78, 130, 190, 0]);
-
-const BISHOP_PAIR_MG = 26, BISHOP_PAIR_EG = 48;
-const ROOK_OPEN_MG = 26, ROOK_OPEN_EG = 12;
-const ROOK_SEMI_MG = 12, ROOK_SEMI_EG = 6;
-const ROOK_7TH_MG = 14, ROOK_7TH_EG = 28;
-const OUTPOST_MG = 22, OUTPOST_EG = 10;
-const TEMPO_MG = 14, TEMPO_EG = 6;
-const KNIGHT_PAWN_ADJ = 3;   // kuda makin kuat kalau pion masih banyak
-const BISHOP_PAWN_PEN = -4;  // gajah tersumbat pion sendiri sewarna
-
-// mobilitas: bobot per kotak & "titik netral" biar nilainya nggak meledak
-const MOB_MG = new Int32Array([0, 0, 4, 4, 3, 1, 0]);
-const MOB_EG = new Int32Array([0, 0, 4, 5, 5, 2, 0]);
-const MOB_BASE = new Int32Array([0, 0, 4, 6, 7, 14, 0]);
-
-// bobot serangan ke zona raja per jenis bidak penyerang
 const KING_ATT_W = new Int32Array([0, 0, 2, 2, 3, 5, 0]);
-// Tabel bahaya raja. Indeksnya dihitung dari JUMLAH BIDAK penyerang (masing-masing
-// dihitung sekali, pakai bobot di atas) + jumlah kotak zona yang terserang.
-// Dulu tiap kotak serangan dihitung penuh, dan nilainya jadi meledak sampai
-// ratusan centipawn — posisi seimbang kebaca "menang telak".
+// bahaya raja mentah (indeks dari bobot penyerang + kotak zona yang diserang);
+// besar akhirnya dikali parameter kingDangerScale/64
 const KING_DANGER = new Int32Array(100);
 for (let i = 0; i < 100; i++) KING_DANGER[i] = Math.min(400, Math.round((i * i) / 4.2));
-const SHIELD_PEN = [0, -2, -14, -26];   // penalti per pion tameng yang hilang (by jarak)
-const KING_OPEN_FILE_PEN = -22;
 
-// jarak ke tengah papan (buat menggiring raja musuh ke pojok di endgame)
 const CENTER_DIST = new Int32Array(64);
 for (let i = 0; i < 64; i++) {
   const r = i >> 3, f = i & 7;
   CENTER_DIST[i] = Math.max(Math.abs(r * 2 - 7), Math.abs(f * 2 - 7)) >> 1;
 }
 
-// zona raja: kotak raja + 8 tetangganya (lookup O(1) lewat tabel 16KB).
-// Jangan dibikin lebih lebar: zona yang kelewat besar bikin hitungan serangan
-// membengkak dan nilai keamanan raja jadi mendominasi seluruh evaluasi.
+// zona raja: kotak raja + 8 tetangganya (lookup O(1) lewat tabel 16KB)
 const IN_ZONE = new Uint8Array(128 * 128);
 (function initZone() {
   for (let ks = 0; ks < 128; ks++) {
@@ -200,8 +265,7 @@ const IN_ZONE = new Uint8Array(128 * 128);
     const kr = rankOf(ks), kf = fileOf(ks);
     for (let s = 0; s < 128; s++) {
       if (!onBoard(s)) continue;
-      const dr = Math.abs(rankOf(s) - kr), df = Math.abs(fileOf(s) - kf);
-      if (df <= 1 && dr <= 1) IN_ZONE[ks * 128 + s] = 1;
+      if (Math.abs(fileOf(s) - kf) <= 1 && Math.abs(rankOf(s) - kr) <= 1) IN_ZONE[ks * 128 + s] = 1;
     }
   }
 })();
@@ -211,151 +275,165 @@ function sqDist(a, b) {
 }
 
 // ---------------- scratch (dipakai ulang, nol alokasi per evaluasi) ----------------
-const pawnFiles = [new Int32Array(8), new Int32Array(8)];
-const pawnMinRank = [new Int32Array(8), new Int32Array(8)]; // baris terkecil per file
-const pawnMaxRank = [new Int32Array(8), new Int32Array(8)]; // baris terbesar per file
-const pawnAtt = [new Uint8Array(128), new Uint8Array(128)];
+// Data pion per warna, datar: indeks c*8 + file
+const PF = new Int8Array(16);    // jumlah pion per file
+const PMIN = new Int8Array(16);  // baris terkecil per file
+const PMAX = new Int8Array(16);  // baris terbesar per file
+// Peta serangan datar, indeks c*128 + kotak, isinya bit-flag. Satu array
+// (satu fill per evaluasi) jauh lebih murah daripada delapan array terpisah.
+const ATT = new Uint8Array(256);
+const A_PAWN = 1, A_ANY = 2, A_MINOR = 4, A_ROOK = 8;
+
+// info tambahan dari mode jejak (bagian yang nggak linear terhadap W)
+const TRACE_INFO = { phase: 0, scale: 1, extra: 0 };
 
 /**
- * Evaluasi posisi. Hasil selalu dari sudut pandang PUTIH (positif = putih enak),
- * sama seperti absoluteEval() versi lama, biar gampang dibandingkan.
+ * Evaluasi posisi. Hasil selalu dari sudut pandang PUTIH (positif = putih enak).
  */
-function evaluate(pos) {
+function evaluate(pos) { return evalCore(pos, null); }
+
+/**
+ * Sama seperti evaluate(), tapi juga mengisi T[k] = koefisien parameter k
+ * (putih dikurangi hitam). Dipakai tuner. T harus Float64Array(NPARAMS), nol.
+ */
+function evaluateTrace(pos, T) { return evalCore(pos, T); }
+
+function evalCore(pos, T) {
   const board = pos.board;
   let mg = 0, eg = 0, phase = 0;
 
-  // ---- siapkan peta pion dulu (dipakai hampir semua istilah di bawah) ----
+  PF.fill(0); PMIN.fill(8); PMAX.fill(-1); ATT.fill(0);
   for (let c = 0; c < 2; c++) {
-    pawnFiles[c].fill(0);
-    pawnMinRank[c].fill(8);
-    pawnMaxRank[c].fill(-1);
-    pawnAtt[c].fill(0);
+    const cf = c * 8, cb = c * 128;
     const code = mkPiece(PAWN, c);
     const cnt = pos.pieceCount[code];
+    const up = c === WHITE ? 16 : -16;
     for (let i = 0; i < cnt; i++) {
       const s = pos.pieceList[code * 16 + i];
       const f = fileOf(s), r = rankOf(s);
-      pawnFiles[c][f]++;
-      if (r < pawnMinRank[c][f]) pawnMinRank[c][f] = r;
-      if (r > pawnMaxRank[c][f]) pawnMaxRank[c][f] = r;
-      const up = c === WHITE ? 16 : -16;
+      PF[cf + f]++;
+      if (r < PMIN[cf + f]) PMIN[cf + f] = r;
+      if (r > PMAX[cf + f]) PMAX[cf + f] = r;
       const a1 = s + up - 1, a2 = s + up + 1;
-      if (onBoard(a1)) pawnAtt[c][a1] = 1;
-      if (onBoard(a2)) pawnAtt[c][a2] = 1;
+      if (onBoard(a1)) ATT[cb + a1] |= A_PAWN;
+      if (onBoard(a2)) ATT[cb + a2] |= A_PAWN;
     }
+    // serangan raja ikut dihitung buat "dijaga/diserang" (bukan buat mobilitas)
+    const ks = pos.kingSq[c];
+    for (let k = 0; k < 8; k++) { const t = ks + KING_OFF[k]; if (onBoard(t)) ATT[cb + t] |= A_ANY; }
   }
 
   const pawnsTotal = pos.pieceCount[mkPiece(PAWN, WHITE)] + pos.pieceCount[mkPiece(PAWN, BLACK)];
   const kingSqW = pos.kingSq[WHITE], kingSqB = pos.kingSq[BLACK];
-  const kingZoneBase = [kingSqW * 128, kingSqB * 128];
   const attWeight = [0, 0], attCount = [0, 0], zoneAtt = [0, 0];
 
-  // ---- jalan-jalan ke semua bidak lewat daftar bidak (bukan nyapu 64 kotak) ----
   for (let c = 0; c < 2; c++) {
     const them = c ^ 1;
     const sign = c === WHITE ? 1 : -1;
-    const enemyZone = kingZoneBase[them];
+    const cf = c * 8, tf = them * 8, cb = c * 128, tb = them * 128;
+    const enemyZone = (c === WHITE ? kingSqB : kingSqW) * 128;
+    const up = c === WHITE ? 16 : -16;
     let bishops = 0, lightBishop = 0, darkBishop = 0;
 
     for (let t = PAWN; t <= KING; t++) {
       const code = mkPiece(t, c);
       const cnt = pos.pieceCount[code];
-      const mgT = MG_PST[t], egT = EG_PST[t];
       for (let i = 0; i < cnt; i++) {
         const s = pos.pieceList[code * 16 + i];
         const idx = c === WHITE ? sq64(s) : (sq64(s) ^ 56);
         phase += PHASE_W[t];
-        mg += sign * (MG_VAL[t] + mgT[idx]);
-        eg += sign * (EG_VAL[t] + egT[idx]);
+        // materi + piece-square table
+        let k = K_MAT + t;
+        mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+        k = K_PST + t * 64 + idx;
+        mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
 
         const f = fileOf(s), r = rankOf(s);
         const relRank = c === WHITE ? r : 7 - r;
 
         if (t === PAWN) {
-          // --- struktur pion ---
-          if (pawnFiles[c][f] > 1) { mg += sign * DOUBLED_MG; eg += sign * DOUBLED_EG; }
-          const hasLeft = f > 0 && pawnFiles[c][f - 1] > 0;
-          const hasRight = f < 7 && pawnFiles[c][f + 1] > 0;
-          if (!hasLeft && !hasRight) { mg += sign * ISOLATED_MG; eg += sign * ISOLATED_EG; }
-          // dijaga pion sendiri?
-          if (pawnAtt[c][s]) { mg += sign * SUPPORTED_MG; eg += sign * SUPPORTED_EG; }
-          // berdampingan (phalanx)
+          if (PF[cf + f] > 1) { k = K_DOUBLED; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
+          const hasLeft = f > 0 && PF[cf + f - 1] > 0;
+          const hasRight = f < 7 && PF[cf + f + 1] > 0;
+          if (!hasLeft && !hasRight) { k = K_ISOLATED; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
+          if ((ATT[cb + s] & A_PAWN)) { k = K_SUPPORTED + relRank; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
           if ((f > 0 && board[s - 1] === code) || (f < 7 && board[s + 1] === code)) {
-            mg += sign * PHALANX_MG; eg += sign * PHALANX_EG;
+            k = K_PHALANX + relRank; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
           }
-          // terbelakang: nggak bisa dijaga pion tetangga lagi & kotak depannya dijaga pion musuh
-          const up = c === WHITE ? 16 : -16;
-          if (!pawnAtt[c][s] && onBoard(s + up) && pawnAtt[them][s + up]) {
-            const behindLeft = f > 0 && pawnFiles[c][f - 1] > 0 &&
-              (c === WHITE ? pawnMinRank[c][f - 1] < r : pawnMaxRank[c][f - 1] > r);
-            const behindRight = f < 7 && pawnFiles[c][f + 1] > 0 &&
-              (c === WHITE ? pawnMinRank[c][f + 1] < r : pawnMaxRank[c][f + 1] > r);
-            if (!behindLeft && !behindRight) { mg += sign * BACKWARD_MG; eg += sign * BACKWARD_EG; }
+          if (!(ATT[cb + s] & A_PAWN) && onBoard(s + up) && (ATT[tb + s + up] & A_PAWN)) {
+            const behindLeft = f > 0 && PF[cf + f - 1] > 0 &&
+              (c === WHITE ? PMIN[cf + f - 1] < r : PMAX[cf + f - 1] > r);
+            const behindRight = f < 7 && PF[cf + f + 1] > 0 &&
+              (c === WHITE ? PMIN[cf + f + 1] < r : PMAX[cf + f + 1] > r);
+            if (!behindLeft && !behindRight) { k = K_BACKWARD; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
           }
-          // --- pion lolos (passed pawn) ---
+          // pion lolos
           let passed = true;
           for (let df = -1; df <= 1; df++) {
             const nf = f + df;
-            if (nf < 0 || nf > 7) continue;
-            if (pawnFiles[them][nf] === 0) continue;
-            if (c === WHITE) { if (pawnMaxRank[them][nf] > r) { passed = false; break; } }
-            else { if (pawnMinRank[them][nf] < r) { passed = false; break; } }
+            if (nf < 0 || nf > 7 || PF[tf + nf] === 0) continue;
+            if (c === WHITE ? PMAX[tf + nf] > r : PMIN[tf + nf] < r) { passed = false; break; }
           }
           if (passed) {
-            let pmg = PASSED_MG[relRank], peg = PASSED_EG[relRank];
-            // diblokir bidak musuh di depannya? nilainya turun
+            k = K_PASSED + relRank; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
             const front = s + up;
-            if (onBoard(front) && board[front]) { pmg = (pmg * 2 / 3) | 0; peg = (peg * 2 / 3) | 0; }
-            // di endgame, yang penting raja siapa yang lebih dekat ke kotak promosi
+            if (onBoard(front) && board[front]) {
+              k = K_PASSED_BLOCKED + relRank; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+            } else {
+              let free = true;
+              for (let q = front; onBoard(q); q += up) { if (board[q]) { free = false; break; } }
+              if (free) { k = K_PASSED_FREE + relRank; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
+            }
             const promoSq = (c === WHITE ? 7 : 0) * 16 + f;
-            const myK = c === WHITE ? kingSqW : kingSqB;
-            const opK = c === WHITE ? kingSqB : kingSqW;
-            peg += (sqDist(opK, promoSq) - sqDist(myK, promoSq)) * (relRank + 1) * 2;
-            mg += sign * pmg; eg += sign * peg;
+            const myK = c === WHITE ? kingSqW : kingSqB, opK = c === WHITE ? kingSqB : kingSqW;
+            const coef = (sqDist(opK, promoSq) - sqDist(myK, promoSq)) * (relRank + 1);
+            k = K_PASSED_KDIST; mg += sign * coef * W[2 * k]; eg += sign * coef * W[2 * k + 1]; if (T) T[k] += sign * coef;
           }
         } else if (t === KNIGHT) {
-          // kuda: mobilitas + outpost + makin berguna kalau pion masih rame
           let mob = 0, zoneHits = 0;
-          for (let k = 0; k < 8; k++) {
-            const to = s + KNIGHT_OFF[k];
+          for (let q = 0; q < 8; q++) {
+            const to = s + KNIGHT_OFF[q];
             if (!onBoard(to)) continue;
+            ATT[cb + to] |= A_ANY | A_MINOR;
             if (IN_ZONE[enemyZone + to]) zoneHits++;
             const p = board[to];
             if (p && ((p >> 3) & 1) === c) continue;
-            if (pawnAtt[them][to]) continue;
+            if ((ATT[tb + to] & A_PAWN)) continue;
             mob++;
           }
           if (zoneHits) { attCount[c]++; attWeight[c] += KING_ATT_W[KNIGHT]; zoneAtt[c] += zoneHits; }
-          mg += sign * (MOB_MG[KNIGHT] * (mob - MOB_BASE[KNIGHT]) + KNIGHT_PAWN_ADJ * (pawnsTotal - 8));
-          eg += sign * MOB_EG[KNIGHT] * (mob - MOB_BASE[KNIGHT]);
-          if (relRank >= 3 && relRank <= 5 && pawnAtt[c][s] && !pawnAtt[them][s]) {
-            mg += sign * OUTPOST_MG; eg += sign * OUTPOST_EG;
+          k = K_MOB[KNIGHT] + mob; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+          const pc = pawnsTotal - 8;
+          k = K_KNIGHT_PAWNS; mg += sign * pc * W[2 * k]; eg += sign * pc * W[2 * k + 1]; if (T) T[k] += sign * pc;
+          if (relRank >= 3 && relRank <= 5 && (ATT[cb + s] & A_PAWN) && !(ATT[tb + s] & A_PAWN)) {
+            k = K_OUTPOST_N; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
           }
         } else if (t === BISHOP || t === ROOK || t === QUEEN) {
           const offs = t === BISHOP ? BISHOP_OFF : (t === ROOK ? ROOK_OFF : KING_OFF);
-          const nOff = t === ROOK ? 4 : (t === BISHOP ? 4 : 8);
+          const nOff = t === QUEEN ? 8 : 4;
+          const attFlag = t === BISHOP ? (A_ANY | A_MINOR) : (t === ROOK ? (A_ANY | A_ROOK) : A_ANY);
           let mob = 0, zoneHits = 0;
-          for (let k = 0; k < nOff; k++) {
-            const off = offs[k];
+          for (let q = 0; q < nOff; q++) {
+            const off = offs[q];
             let to = s + off;
             while (onBoard(to)) {
               const p = board[to];
+              ATT[cb + to] |= attFlag;
               if (IN_ZONE[enemyZone + to]) zoneHits++;
               if (p) {
-                if (((p >> 3) & 1) !== c && !pawnAtt[them][to]) mob++;
+                if (((p >> 3) & 1) !== c && !(ATT[tb + to] & A_PAWN)) mob++;
                 break;
               }
-              if (!pawnAtt[them][to]) mob++;
+              if (!(ATT[tb + to] & A_PAWN)) mob++;
               to += off;
             }
           }
           if (zoneHits) { attCount[c]++; attWeight[c] += KING_ATT_W[t]; zoneAtt[c] += zoneHits; }
-          mg += sign * MOB_MG[t] * (mob - MOB_BASE[t]);
-          eg += sign * MOB_EG[t] * (mob - MOB_BASE[t]);
+          if (mob > MOB_MAX[t]) mob = MOB_MAX[t];
+          k = K_MOB[t] + mob; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
           if (t === BISHOP) {
             bishops++;
             if (((f + r) & 1) === 0) darkBishop++; else lightBishop++;
-            // gajah kehalang pion sendiri yang sewarna kotaknya
             let blockers = 0;
             const pcode = mkPiece(PAWN, c);
             const pcnt = pos.pieceCount[pcode];
@@ -363,93 +441,113 @@ function evaluate(pos) {
               const ps = pos.pieceList[pcode * 16 + j];
               if (((fileOf(ps) + rankOf(ps)) & 1) === ((f + r) & 1)) blockers++;
             }
-            mg += sign * BISHOP_PAWN_PEN * blockers;
-            eg += sign * BISHOP_PAWN_PEN * blockers;
-          } else if (t === ROOK) {
-            if (pawnFiles[c][f] === 0) {
-              if (pawnFiles[them][f] === 0) { mg += sign * ROOK_OPEN_MG; eg += sign * ROOK_OPEN_EG; }
-              else { mg += sign * ROOK_SEMI_MG; eg += sign * ROOK_SEMI_EG; }
+            k = K_BISHOP_BLOCKED; mg += sign * blockers * W[2 * k]; eg += sign * blockers * W[2 * k + 1]; if (T) T[k] += sign * blockers;
+            if (relRank >= 3 && relRank <= 5 && (ATT[cb + s] & A_PAWN) && !(ATT[tb + s] & A_PAWN)) {
+              k = K_OUTPOST_B; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
             }
-            if (relRank === 6) { mg += sign * ROOK_7TH_MG; eg += sign * ROOK_7TH_EG; }
+          } else if (t === ROOK) {
+            if (PF[cf + f] === 0) {
+              k = PF[tf + f] === 0 ? K_ROOK_OPEN : K_ROOK_SEMI;
+              mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+            }
+            if (relRank === 6) { k = K_ROOK_7TH; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
           }
         }
       }
     }
     if (bishops >= 2 && lightBishop >= 1 && darkBishop >= 1) {
-      mg += sign * BISHOP_PAIR_MG; eg += sign * BISHOP_PAIR_EG;
+      const k = K_BISHOP_PAIR; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
     }
   }
 
-  // ---- keamanan raja (hanya kerasa di midgame; otomatis luntur di endgame) ----
+  // ---- ancaman & bidak menggantung (perlu peta serangan yang sudah lengkap) ----
+  for (let c = 0; c < 2; c++) {
+    const them = c ^ 1;
+    const sign = c === WHITE ? 1 : -1;
+    const cb = c * 128, tb = them * 128;
+    for (let t = PAWN; t <= QUEEN; t++) {
+      const code = mkPiece(t, them);
+      const cnt = pos.pieceCount[code];
+      for (let i = 0; i < cnt; i++) {
+        const s = pos.pieceList[code * 16 + i];
+        const a = ATT[cb + s];
+        if (!a) continue;
+        let k = -1;
+        if (t >= KNIGHT && (a & A_PAWN)) k = K_THREAT_PAWN + t;
+        else if (t >= ROOK && (a & A_MINOR)) k = K_THREAT_MINOR + t;
+        else if (t === QUEEN && (a & A_ROOK)) k = K_THREAT_ROOK_Q;
+        if (k >= 0) { mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign; }
+        if (ATT[tb + s] === 0) {
+          k = K_HANGING + t; mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+        }
+      }
+    }
+  }
+
+  // ---- keamanan raja ----
   for (let c = 0; c < 2; c++) {
     const sign = c === WHITE ? 1 : -1;
     const them = c ^ 1;
+    const cf = c * 8;
     const ks = c === WHITE ? kingSqW : kingSqB;
     const kf = fileOf(ks), kr = rankOf(ks);
-    // tameng pion di tiga file sekitar raja
     for (let df = -1; df <= 1; df++) {
       const f = kf + df;
       if (f < 0 || f > 7) continue;
-      if (pawnFiles[c][f] === 0) {
-        mg += sign * KING_OPEN_FILE_PEN;
-      } else {
-        const nearest = c === WHITE ? pawnMinRank[c][f] : pawnMaxRank[c][f];
-        const dist = Math.abs(nearest - kr);
-        mg += sign * SHIELD_PEN[Math.min(3, dist)];
+      let k;
+      if (PF[cf + f] === 0) k = K_KING_OPEN;
+      else {
+        const nearest = c === WHITE ? PMIN[cf + f] : PMAX[cf + f];
+        k = K_SHIELD + Math.min(3, Math.abs(nearest - kr));
       }
+      mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
     }
-    // bobot serangan musuh ke zona raja: butuh minimal dua bidak penyerang —
-    // satu bidak sendirian nggak bikin raja beneran repot
     if (attCount[them] >= 2) {
-      const w = Math.min(99, attWeight[them] * 2 + zoneAtt[them]);
-      mg -= sign * KING_DANGER[w];
+      const raw = KING_DANGER[Math.min(99, attWeight[them] * 2 + zoneAtt[them])];
+      const k = K_KING_DANGER;
+      mg -= sign * ((raw * W[2 * k]) >> 6); eg -= sign * ((raw * W[2 * k + 1]) >> 6);
+      if (T) T[k] -= sign * raw / 64;
     }
   }
 
-  // ---- tempo: yang jalan dapat sedikit bonus ----
-  const tempoSign = pos.side === WHITE ? 1 : -1;
-  mg += tempoSign * TEMPO_MG; eg += tempoSign * TEMPO_EG;
+  // ---- tempo ----
+  {
+    const sign = pos.side === WHITE ? 1 : -1, k = K_TEMPO;
+    mg += sign * W[2 * k]; eg += sign * W[2 * k + 1]; if (T) T[k] += sign;
+  }
 
-  // ---- campur midgame & endgame sesuai sisa materi ----
   if (phase > TOTAL_PHASE) phase = TOTAL_PHASE;
   let score = ((mg * phase) + (eg * (TOTAL_PHASE - phase))) / TOTAL_PHASE;
-
-  // ---- penyesuaian endgame ----
-  score = endgameAdjust(pos, score, phase);
+  score = endgameAdjust(pos, score, phase, T);
+  if (T) TRACE_INFO.phase = phase;
   return score | 0;
 }
 
-// Dua hal yang bikin endgame nggak ngaco:
-//  1) kalau materi nggak cukup buat menang, nilainya dikecilin (jangan ngejar
-//     "keunggulan" yang sebenarnya seri)
-//  2) kalau lawan cuma raja doang, dorong raja musuh ke pojok & dekatkan raja
-//     sendiri — ini yang bikin skakmat dasar (raja+menteri, raja+benteng) beneran
-//     kelar, bukan muter-muter sampai aturan 50 langkah
-function endgameAdjust(pos, score, phase) {
+// Penyesuaian endgame (bagian yang nggak linear terhadap W — dicatat terpisah
+// di TRACE_INFO supaya tuner tetap bisa menghitung nilai yang sama persis).
+function endgameAdjust(pos, score, phase, T) {
   const pawnsW = pos.pieceCount[mkPiece(PAWN, WHITE)], pawnsB = pos.pieceCount[mkPiece(PAWN, BLACK)];
   const strong = score > 0 ? WHITE : BLACK;
   const weak = strong ^ 1;
   const strongPawns = strong === WHITE ? pawnsW : pawnsB;
-
   const weakPieces = pos.pieceCount[mkPiece(KNIGHT, weak)] + pos.pieceCount[mkPiece(BISHOP, weak)] +
     pos.pieceCount[mkPiece(ROOK, weak)] + pos.pieceCount[mkPiece(QUEEN, weak)] +
     (weak === WHITE ? pawnsW : pawnsB);
-
+  let scale = 1, extra = 0;
   if (strongPawns === 0) {
-    const strongMat = pos.pieceCount[mkPiece(KNIGHT, strong)] * 320 + pos.pieceCount[mkPiece(BISHOP, strong)] * 330 +
-      pos.pieceCount[mkPiece(ROOK, strong)] * 500 + pos.pieceCount[mkPiece(QUEEN, strong)] * 900;
-    const weakMat = pos.pieceCount[mkPiece(KNIGHT, weak)] * 320 + pos.pieceCount[mkPiece(BISHOP, weak)] * 330 +
-      pos.pieceCount[mkPiece(ROOK, weak)] * 500 + pos.pieceCount[mkPiece(QUEEN, weak)] * 900;
+    const mat = c => pos.pieceCount[mkPiece(KNIGHT, c)] * 320 + pos.pieceCount[mkPiece(BISHOP, c)] * 330 +
+      pos.pieceCount[mkPiece(ROOK, c)] * 500 + pos.pieceCount[mkPiece(QUEEN, c)] * 900;
     // tanpa pion & selisih materi kurang dari satu benteng: biasanya seri
-    if (strongMat - weakMat < 400) score = (score / 4) | 0;
+    if (mat(strong) - mat(weak) < 400) { scale = 0.25; score = (score / 4) | 0; }
   }
-
   if (weakPieces === 0 && phase <= 8) {
     // lawan tinggal raja: giring ke pojok, rapatkan raja sendiri
     const wk = pos.kingSq[weak], sk = pos.kingSq[strong];
     const drive = CENTER_DIST[sq64(wk)] * 14 + (7 - sqDist(sk, wk)) * 10;
-    score += (strong === WHITE ? drive : -drive);
+    extra = strong === WHITE ? drive : -drive;
+    score += extra;
   }
+  if (T) { TRACE_INFO.scale = scale; TRACE_INFO.extra = extra; }
   return score;
 }
 
@@ -464,4 +562,7 @@ function absoluteEval(x) {
   return evaluate(new P.Position().setFen(fen));
 }
 
-module.exports = { evaluate, absoluteEval, VAL, MG_VAL, EG_VAL, PHASE_W, TOTAL_PHASE };
+module.exports = {
+  evaluate, evaluateTrace, absoluteEval, VAL, PHASE_W, TOTAL_PHASE,
+  W, NAMES, NPARAMS, DEFAULTS, TRACE_INFO, loadParams, exportParams, PARAMS_FILE,
+};
