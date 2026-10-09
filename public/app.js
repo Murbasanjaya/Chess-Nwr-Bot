@@ -81,18 +81,12 @@
   const POINTS = {p:1,n:3,b:3,r:5,q:9};
   function pieceSvg(type){ return '<svg class="piece-svg" viewBox="0 0 45 45"><use href="#'+PIECE_SYMBOL[type]+'"></use></svg>'; }
 
-  // purely cosmetic labels mirroring the server's strength tiers (no engine logic here)
+  // Label level diambil dari server (/api/levels) supaya selalu sama dengan
+  // tabel kalibrasi engine; ini cuma cadangan sebelum data server datang.
+  let eloBands = [{below:null, tag:''}];
   function eloTagText(elo){
-    if(elo<700)  return 'Pemula — asal jalan, sering blunder';
-    if(elo<1000) return 'Santai — mikir sebentar, kadang meleset';
-    if(elo<1300) return 'Menengah — sesekali meleset';
-    if(elo<1600) return 'Cukup kuat — jarang blunder';
-    if(elo<1900) return 'Kuat — mulai menghitung taktik beberapa langkah';
-    if(elo<2200) return 'Ahli — jeli baca kombinasi';
-    if(elo<2600) return 'Master — mengincar celah taktik & kombinasi menang';
-    if(elo<3200) return 'Grandmaster — menghitung dalam, memburu skakmat';
-    if(elo<4000) return 'Super GM — sangat sulit dikalahkan';
-    return 'Maksimal — menghitung sangat dalam, mengejar skakmat begitu ada celah';
+    for(const b of eloBands){ if(b.below===null || elo < b.below) return b.tag; }
+    return '';
   }
 
   // ---------- sound ----------
@@ -614,4 +608,13 @@
   nameTop.textContent = botNameInput.value.trim() || 'Bot';
   updateEloUI();
   startNewGame();
+  // Rentang Elo yang benar-benar terkalibrasi (hasil pertandingan lawan
+  // Stockfish ber-Elo resmi), bukan angka asal.
+  fetch('/api/levels').then(r=>r.json()).then(info=>{
+    eloSlider.min = info.min; eloSlider.max = info.max; eloSlider.step = info.step || 50;
+    eloBands = info.bands || eloBands;
+    const saved = parseInt(loadPref('elo','1200'),10);
+    eloSlider.value = String(Math.max(info.min, Math.min(info.max, saved)));
+    updateEloUI();
+  }).catch(()=>{});
 })();

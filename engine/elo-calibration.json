@@ -1,0 +1,113 @@
+{
+ "scale": "UCI_Elo Stockfish 19 (skala yang dikalibrasi tim Stockfish ke daftar CCRL) — BUKAN rating FIDE/chess.com/lichess",
+ "method": "pertandingan melawan Stockfish ber-UCI_Elo (movetime 100ms), 60 partai per putaran, pembuka seimbang dari buku (warna ditukar); Elo = performance rating maximum-likelihood dari semua partai; titik di bawah 1320 dirantai ke titik engine sendiri",
+ "date": "2026-10-09",
+ "points": [
+  {
+   "s": -0.5,
+   "elo": 337,
+   "lo": 138,
+   "hi": 537,
+   "games": 120,
+   "anchors": [
+    "engine s=-0.25 (~592) (7M 3S 50K)",
+    "engine s=-0.25 (~592) (13M 2S 45K)"
+   ]
+  },
+  {
+   "s": -0.25,
+   "elo": 592,
+   "lo": 408,
+   "hi": 776,
+   "games": 180,
+   "anchors": [
+    "engine s=0 (~963) (7M 3S 50K)",
+    "engine s=0 (~963) (5M 3S 52K)",
+    "engine s=0 (~963) (3M 2S 55K)"
+   ]
+  },
+  {
+   "s": 0,
+   "elo": 963,
+   "lo": 797,
+   "hi": 1130,
+   "games": 60,
+   "anchors": [
+    "engine s=0.1 (~1223) (9M 4S 47K)"
+   ]
+  },
+  {
+   "s": 0.1,
+   "elo": 1223,
+   "lo": 1096,
+   "hi": 1351,
+   "games": 60,
+   "anchors": [
+    "engine s=0.25 (~1399) (16M 0S 44K)"
+   ]
+  },
+  {
+   "s": 0.25,
+   "elo": 1399,
+   "lo": 1319,
+   "hi": 1480,
+   "games": 180,
+   "anchors": [
+    "Stockfish UCI_Elo 1730 (4M 4S 52K)",
+    "engine s=0.4 (~1926) (4M 1S 55K)",
+    "Stockfish UCI_Elo 1400 (28M 4S 28K)"
+   ]
+  },
+  {
+   "s": 0.4,
+   "elo": 1926,
+   "lo": 1844,
+   "hi": 2009,
+   "games": 60,
+   "anchors": [
+    "Stockfish UCI_Elo 2060 (13M 12S 35K)"
+   ]
+  },
+  {
+   "s": 0.55,
+   "elo": 2262,
+   "lo": 2181,
+   "hi": 2342,
+   "games": 60,
+   "anchors": [
+    "Stockfish UCI_Elo 2250 (26M 10S 24K)"
+   ]
+  },
+  {
+   "s": 0.7,
+   "elo": 2454,
+   "lo": 2385,
+   "hi": 2524,
+   "games": 60,
+   "anchors": [
+    "Stockfish UCI_Elo 2390 (24M 23S 13K)"
+   ]
+  },
+  {
+   "s": 0.85,
+   "elo": 2586,
+   "lo": 2515,
+   "hi": 2658,
+   "games": 60,
+   "anchors": [
+    "Stockfish UCI_Elo 2510 (26M 21S 13K)"
+   ]
+  },
+  {
+   "s": 1,
+   "elo": 2713,
+   "lo": 2642,
+   "hi": 2785,
+   "games": 120,
+   "anchors": [
+    "Stockfish UCI_Elo 2200 (50M 8S 2K)",
+    "Stockfish UCI_Elo 2580 (34M 20S 6K)"
+   ]
+  }
+ ]
+}

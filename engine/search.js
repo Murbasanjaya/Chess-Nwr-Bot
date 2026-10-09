@@ -42,7 +42,13 @@ const S_KILLER1 = 1 << 21;
 const S_KILLER2 = (1 << 21) - 100;
 const S_COUNTER = (1 << 21) - 200;
 const S_BAD_CAP = -(1 << 22);
-const HISTORY_MAX = (1 << 20) - 1;
+// History dibatasi +-HIST_MAX dengan update bergaya "gravity": makin dekat ke
+// batas, makin kecil kenaikannya. Nggak perlu lagi membagi dua seluruh tabel.
+const HIST_MAX = 16384;
+function histUpdate(arr, i, bonus) {
+  arr[i] += bonus - ((arr[i] * (bonus < 0 ? -bonus : bonus)) / HIST_MAX | 0);
+}
+function statBonus(d) { const b = 140 * d - 100; return b < 40 ? 40 : (b > 1600 ? 1600 : b); }
 
 // tabel reduksi LMR: makin dalam & makin belakang urutannya, makin dipangkas
 const LMR = [];
@@ -84,6 +90,19 @@ class Searcher {
     this.killers = new Int32Array((MAX_PLY + 8) * 2);
     this.history = new Int32Array(16 * 128);
     this.counter = new Int32Array(16 * 128);
+    // Continuation history: "kalau lawan barusan jalan X (atau aku jalan Y dua
+    // ply lalu), langkah Z biasanya bagus". Indeks: [bidak+tujuan sebelumnya][bidak+tujuan].
+    this.contHist = new Int32Array(1024 * 1024);
+    this.stackPiece = new Int32Array(MAX_PLY + 8);
+    this.stackTo = new Int32Array(MAX_PLY + 8);
+    // status skak per ply, diisi induk sebelum turun: -1 = belum tahu, 0/1 = tahu
+    this.chk = new Int8Array(MAX_PLY + 8).fill(-1);
+    // Cache evaluasi statis (kunci posisi -> nilai). Re-search (LMR, PVS,
+    // aspiration, singular) sering mengevaluasi posisi yang sama berkali-kali.
+    this.evMask = (1 << 18) - 1;
+    this.evKeyA = new Int32Array(this.evMask + 1);
+    this.evKeyB = new Int32Array(this.evMask + 1);
+    this.evVal = new Int32Array(this.evMask + 1);
     this.evalStack = new Int32Array(MAX_PLY + 8);
     this.pvLine = [];
 
@@ -96,6 +115,21 @@ class Searcher {
     this.rootSide = WHITE;
     this.contempt = 8;   // sedikit menghindari seri — lebih suka terus main
     this.seldepth = 0;
+  }
+
+  // Evaluasi statis dari sudut pandang pihak yang jalan, lewat cache.
+  staticEvalOf(pos) {
+    const i = pos.keyA & this.evMask;
+    if (this.evKeyA[i] === pos.keyA && this.evKeyB[i] === pos.keyB) return this.evVal[i];
+    const v = evaluate(pos) * (pos.side === WHITE ? 1 : -1);
+    this.evKeyA[i] = pos.keyA; this.evKeyB[i] = pos.keyB; this.evVal[i] = v;
+    return v;
+  }
+
+  // Status skak di ply ini: pakai hasil induk kalau sudah dihitung.
+  inCheckAt(pos, ply) {
+    const c = this.chk[ply];
+    return c >= 0 ? c === 1 : pos.inCheck();
   }
 
   // ---------------- transposition table ----------------
@@ -125,14 +159,18 @@ class Searcher {
   clearTables() {
     this.ttKeyA.fill(0); this.ttKeyB.fill(0); this.ttMove.fill(0);
     this.ttScore.fill(0); this.ttDepth.fill(0); this.ttFlag.fill(0); this.ttAge.fill(0);
-    this.history.fill(0); this.counter.fill(0); this.killers.fill(0);
+    this.history.fill(0); this.counter.fill(0); this.killers.fill(0); this.contHist.fill(0);
     this.generation = 0;
   }
 
   // ---------------- manajemen waktu ----------------
   checkTime() {
+    // Batas node dicek di SETIAP node (cuma satu perbandingan) supaya level
+    // dengan jatah kecil benar-benar berhenti di jatahnya. Jam dicek tiap 1024
+    // node saja karena Date.now() relatif mahal.
+    if (this.nodes >= this.nodeLimit) { this.stopped = true; return; }
     if ((this.checkCounter = (this.checkCounter + 1) & 1023) === 0) {
-      if (Date.now() >= this.deadline || this.nodes >= this.nodeLimit) this.stopped = true;
+      if (Date.now() >= this.deadline) this.stopped = true;
     }
   }
 
@@ -149,6 +187,7 @@ class Searcher {
     const k1 = this.killers[ply * 2], k2 = this.killers[ply * 2 + 1];
     const counterIdx = prevMove ? (pos.board[MTO(prevMove)] * 128 + MTO(prevMove)) : -1;
     const counterMove = counterIdx >= 0 ? this.counter[counterIdx] : 0;
+    const c1 = this.contBase(ply - 1), c2 = this.contBase(ply - 2);
     for (let i = 0; i < n; i++) {
       const m = buf[base + i];
       let s;
@@ -175,7 +214,11 @@ class Searcher {
         } else if (m === counterMove) {
           s = S_COUNTER;
         } else {
-          s = this.history[pos.board[MFROM(m)] * 128 + MTO(m)];
+          const pc = pos.board[MFROM(m)], to = MTO(m);
+          s = this.history[pc * 128 + to];
+          const ci = pc * 64 + ((to >> 4) << 3) + (to & 7);
+          if (c1 >= 0) s += this.contHist[c1 + ci];
+          if (c2 >= 0) s += this.contHist[c2 + ci];
         }
       }
       sc[base + i] = s;
@@ -197,28 +240,37 @@ class Searcher {
     return buf[base + i];
   }
 
-  updateQuietHeuristics(pos, m, ply, depth, prevMove) {
-    const pieceIdx = pos.board[MFROM(m)] * 128 + MTO(m);
-    const bonus = depth * depth + depth;
-    let h = this.history[pieceIdx] + bonus;
-    if (h > HISTORY_MAX) {
-      // penuaan: semua history dibagi dua biar nggak jenuh di satu langkah
-      for (let i = 0; i < this.history.length; i++) this.history[i] >>= 1;
-      h = this.history[pieceIdx] + bonus;
+  // Basis indeks continuation history buat langkah yang dimainkan di `ply`
+  // (atau -1 kalau nggak ada: di luar pohon, atau null move).
+  contBase(ply) {
+    if (ply < 0) return -1;
+    const pc = this.stackPiece[ply];
+    if (!pc) return -1;
+    const to = this.stackTo[ply];
+    return (pc * 64 + ((to >> 4) << 3) + (to & 7)) * 1024;
+  }
+
+  // Langkah diam `m` bikin cutoff: naikkan history-nya, turunkan history
+  // langkah diam lain yang sudah dicoba duluan tapi gagal.
+  updateQuietHeuristics(pos, m, ply, depth, prevMove, quietList, nQuiet) {
+    const bonus = statBonus(depth);
+    const c1 = this.contBase(ply - 1), c2 = this.contBase(ply - 2);
+    for (let q = -1; q < nQuiet; q++) {
+      const mv = q < 0 ? m : quietList[q];
+      if (q >= 0 && mv === m) continue;
+      const b = q < 0 ? bonus : -bonus;
+      const pc = pos.board[MFROM(mv)], to = MTO(mv);
+      histUpdate(this.history, pc * 128 + to, b);
+      const ci = pc * 64 + ((to >> 4) << 3) + (to & 7);
+      if (c1 >= 0) histUpdate(this.contHist, c1 + ci, b);
+      if (c2 >= 0) histUpdate(this.contHist, c2 + ci, b);
     }
-    this.history[pieceIdx] = h;
     const kBase = ply * 2;
     if (this.killers[kBase] !== m) {
       this.killers[kBase + 1] = this.killers[kBase];
       this.killers[kBase] = m;
     }
     if (prevMove) this.counter[pos.board[MTO(prevMove)] * 128 + MTO(prevMove)] = m;
-  }
-
-  penalizeQuiet(pos, m, depth) {
-    const idx = pos.board[MFROM(m)] * 128 + MTO(m);
-    const h = this.history[idx] - (depth * depth);
-    this.history[idx] = h < -HISTORY_MAX ? -HISTORY_MAX : h;
   }
 
   // ---------------- quiescence search ----------------
@@ -232,10 +284,10 @@ class Searcher {
     if (ply >= MAX_PLY - 2) return evaluate(pos) * (pos.side === WHITE ? 1 : -1);
     if (pos.halfmove >= 100 || pos.isInsufficientMaterial() || pos.isRepetition()) return this.drawScore(pos);
 
-    const inCheck = pos.inCheck();
+    const inCheck = this.inCheckAt(pos, ply);
     let standPat = -INF;
     if (!inCheck) {
-      standPat = evaluate(pos) * (pos.side === WHITE ? 1 : -1);
+      standPat = this.staticEvalOf(pos);
       if (standPat >= beta) return standPat;
       if (standPat > alpha) alpha = standPat;
     }
@@ -271,6 +323,7 @@ class Searcher {
       }
       if (!pos.makeMove(m)) continue;
       legal++;
+      this.chk[ply + 1] = -1;
       const score = -this.quiescence(pos, -beta, -alpha, ply + 1);
       pos.unmakeMove();
       if (this.stopped) return 0;
@@ -292,7 +345,7 @@ class Searcher {
   }
 
   // ---------------- negamax utama ----------------
-  negamax(pos, depth, alpha, beta, ply, canNull, prevMove, extLeft) {
+  negamax(pos, depth, alpha, beta, ply, canNull, prevMove, extLeft, excluded) {
     if (depth <= 0) return this.quiescence(pos, alpha, beta, ply);
     this.nodes++;
     this.checkTime();
@@ -320,20 +373,20 @@ class Searcher {
       ttScore = this.ttScoreFor(ttIdx, ply);
       ttFlag = this.ttFlag[ttIdx];
       ttDepth = this.ttDepth[ttIdx];
-      if (!isPv && ttDepth >= depth) {
+      if (!isPv && !excluded && ttDepth >= depth) {
         if (ttFlag === TT_EXACT) return ttScore;
         if (ttFlag === TT_LOWER && ttScore >= beta) return ttScore;
         if (ttFlag === TT_UPPER && ttScore <= alpha) return ttScore;
       }
     }
 
-    const inCheck = pos.inCheck();
-    const staticEval = inCheck ? -INF : evaluate(pos) * (pos.side === WHITE ? 1 : -1);
+    const inCheck = this.inCheckAt(pos, ply);
+    const staticEval = inCheck ? -INF : this.staticEvalOf(pos);
     this.evalStack[ply] = staticEval;
     // posisi membaik dibanding dua ply lalu? kalau membaik, pangkasnya lebih hati-hati
     const improving = !inCheck && ply >= 2 && this.evalStack[ply - 2] !== -INF && staticEval > this.evalStack[ply - 2];
 
-    if (!isPv && !inCheck && Math.abs(beta) < MATE_IN_MAX) {
+    if (!isPv && !inCheck && !excluded && Math.abs(beta) < MATE_IN_MAX) {
       // reverse futility: posisi udah jauh di atas beta, lawan nggak akan ke sini
       if (depth <= 8 && staticEval - (85 - (improving ? 20 : 0)) * depth >= beta) return staticEval;
       // razoring: posisi jauh di bawah alpha di kedalaman kecil — cek cepat pakai
@@ -346,8 +399,10 @@ class Searcher {
       // null-move pruning: kasih lawan giliran gratis; kalau masih >= beta, cabang ini aman dipangkas
       if (canNull && depth >= 3 && staticEval >= beta && pos.hasNonPawnMaterial(pos.side)) {
         const R = 3 + ((depth / 6) | 0) + (improving ? 1 : 0);
+        this.stackPiece[ply] = 0;
+        this.chk[ply + 1] = 0;
         pos.makeNull();
-        const score = -this.negamax(pos, depth - 1 - R, -beta, -beta + 1, ply + 1, false, 0, extLeft);
+        const score = -this.negamax(pos, depth - 1 - R, -beta, -beta + 1, ply + 1, false, 0, extLeft, 0);
         pos.unmakeNull();
         if (this.stopped) return 0;
         if (score >= beta) return score >= MATE_IN_MAX ? beta : score;
@@ -361,6 +416,20 @@ class Searcher {
     let d = depth;
     if (!ttMove && !isPv && d >= 5 && !inCheck) d--;
 
+    // Singular extension: kalau TT bilang satu langkah jauh lebih bagus dari
+    // SEMUA alternatifnya, langkah itu "tunggal" — cari lebih dalam satu ply.
+    // Caranya: cari posisi yang sama TANPA langkah itu dengan batas sedikit di
+    // bawah skor TT-nya. Kalau semua alternatif gagal mencapainya, ya tunggal.
+    let singular = false;
+    if (!rootNode && !excluded && d >= 8 && ttMove && ttDepth >= d - 3 &&
+        (ttFlag === TT_LOWER || ttFlag === TT_EXACT) && Math.abs(ttScore) < MATE_IN_MAX && extLeft > 0) {
+      const sBeta = ttScore - 2 * d;
+      const v = this.negamax(pos, (d - 1) >> 1, sBeta - 1, sBeta, ply, false, prevMove, extLeft, ttMove);
+      if (this.stopped) return 0;
+      if (v < sBeta) singular = true;
+      else if (sBeta >= beta) return sBeta; // multi-cut: ada lebih dari satu langkah yang cukup bagus
+    }
+
     const n = pos.generate(ply, false);
     this.scoreMoves(pos, ply, n, ttMove, prevMove);
     const base = ply * MOVES_PER_PLY;
@@ -372,6 +441,7 @@ class Searcher {
 
     for (let i = 0; i < n; i++) {
       const m = this.pickMove(pos, base, i, n);
+      if (m === excluded) continue;
       const mScore = pos.scoreBuf[base + i];
       const quiet = MCAP(m) === 0 && !isEP(m) && MPROMO(m) === 0;
 
@@ -390,23 +460,30 @@ class Searcher {
           if (lmrDepth <= 4 && staticEval + 110 + 130 * (lmrDepth > 0 ? lmrDepth : 0) <= alpha) {
             quietsTried++; continue;
           }
+          // history pruning: langkah diam yang terbukti jelek berkali-kali
+          if (lmrDepth <= 3 && mScore < S_COUNTER - 1000 && mScore < -3500 * (lmrDepth + 1)) {
+            quietsTried++; continue;
+          }
         } else if (d <= 5 && mScore < S_GOOD_CAP && pos.see(m) < -90 * d) {
           continue; // makan rugi di kedalaman kecil
         }
       }
 
+      this.stackPiece[ply] = pos.board[MFROM(m)];
+      this.stackTo[ply] = MTO(m);
       if (!pos.makeMove(m)) continue;
       legal++;
       if (quiet) { quietsTried++; if (nQuiet < 64) quietList[nQuiet++] = m; }
 
       const givesCheck = pos.inCheck();
-      // check extension: rangkaian skak dicari lebih dalam (dibatasi budget ext)
+      this.chk[ply + 1] = givesCheck ? 1 : 0;
+      // perluasan (dibatasi budget ext): skak, atau langkah TT yang "tunggal"
       let ext = 0;
-      if (givesCheck && extLeft > 0 && (d >= 2 || isPv)) ext = 1;
+      if (extLeft > 0 && ((givesCheck && (d >= 2 || isPv)) || (singular && m === ttMove))) ext = 1;
 
       let score;
       if (legal === 1) {
-        score = -this.negamax(pos, d - 1 + ext, -beta, -alpha, ply + 1, true, m, extLeft - ext);
+        score = -this.negamax(pos, d - 1 + ext, -beta, -alpha, ply + 1, true, m, extLeft - ext, 0);
       } else {
         // Late Move Reductions
         let r = 0;
@@ -416,17 +493,17 @@ class Searcher {
           r = LMR[di][mi];
           if (isPv) r--;
           if (improving) r--;
-          if (mScore >= S_KILLER2) r--;          // killer / counter-move
-          else if (mScore < 0) r++;              // history-nya jelek
+          if (mScore >= S_COUNTER - 1000) r--;   // killer / counter-move
+          else r -= (mScore / 8000) | 0;          // history bagus: reduksi lebih kecil; jelek: lebih besar
           if (r < 0) r = 0;
           if (r > d - 2) r = d - 2;
         }
-        score = -this.negamax(pos, d - 1 - r + ext, -alpha - 1, -alpha, ply + 1, true, m, extLeft - ext);
+        score = -this.negamax(pos, d - 1 - r + ext, -alpha - 1, -alpha, ply + 1, true, m, extLeft - ext, 0);
         if (score > alpha && r > 0) {
-          score = -this.negamax(pos, d - 1 + ext, -alpha - 1, -alpha, ply + 1, true, m, extLeft - ext);
+          score = -this.negamax(pos, d - 1 + ext, -alpha - 1, -alpha, ply + 1, true, m, extLeft - ext, 0);
         }
         if (score > alpha && score < beta) {
-          score = -this.negamax(pos, d - 1 + ext, -beta, -alpha, ply + 1, true, m, extLeft - ext);
+          score = -this.negamax(pos, d - 1 + ext, -beta, -alpha, ply + 1, true, m, extLeft - ext, 0);
         }
       }
       pos.unmakeMove();
@@ -437,22 +514,19 @@ class Searcher {
         if (score > alpha) {
           alpha = score;
           if (alpha >= beta) {
-            if (quiet) {
-              this.updateQuietHeuristics(pos, m, ply, d, prevMove);
-              // langkah diam lain yang sudah dicoba tapi gagal: history-nya dikurangi
-              for (let q = 0; q < nQuiet; q++) {
-                if (quietList[q] !== m) this.penalizeQuiet(pos, quietList[q], d);
-              }
-            }
+            if (quiet) this.updateQuietHeuristics(pos, m, ply, d, prevMove, quietList, nQuiet);
             break;
           }
         }
       }
     }
 
-    if (legal === 0) return inCheck ? -MATE + ply : this.drawScore(pos);
+    if (legal === 0) {
+      if (excluded) return alpha; // semua alternatif sudah dicoba; langkah yang dikecualikan memang satu-satunya
+      return inCheck ? -MATE + ply : this.drawScore(pos);
+    }
 
-    if (!this.stopped) {
+    if (!this.stopped && !excluded) {
       const flag = best >= beta ? TT_LOWER : (best > origAlpha ? TT_EXACT : TT_UPPER);
       this.ttStore(keyA, keyB, d, best, flag, bestMove, ply);
     }
@@ -461,7 +535,7 @@ class Searcher {
 
   // ---------------- pencarian akar ----------------
   /**
-   * opts: { maxDepth, budgetMs, nodeLimit, classMargin, gradeAll, onIteration }
+   * opts: { maxDepth, budgetMs, nodeLimit, classMargin, gradeAll, gradeBudgetMs, gradeNodes, onIteration }
    *
    * Dua tahap, sengaja dipisah:
    *
@@ -490,6 +564,7 @@ class Searcher {
     this.rootSide = pos.side;
     this.generation = (this.generation + 1) & 255;
     this.killers.fill(0);
+    this.chk.fill(-1);
 
     // kumpulkan langkah akar yang benar-benar legal
     const n = pos.generate(0, false);
@@ -518,10 +593,24 @@ class Searcher {
 
     let scores = new Int32Array(order.length).fill(-INF);
     let bestMove = order[0], bestScore = -INF, completedDepth = 0;
+    // langkah paksa (cuma satu langkah legal): nggak ada yang perlu dipikir lama
+    const depthCap = cand.length === 1 ? Math.min(maxDepth, 4) : maxDepth;
+    let stable = 0, prevIterScore = null, scoreDrop = 0;
 
-    for (let depth = 1; depth <= maxDepth; depth++) {
-      // jangan mulai iterasi baru kalau jatah waktunya hampir pasti nggak cukup
-      if (depth > 1 && Date.now() - t0 > budgetMs * 0.47) break;
+    for (let depth = 1; depth <= depthCap; depth++) {
+      // Manajemen waktu: jangan mulai iterasi baru kalau waktunya kemungkinan
+      // nggak cukup. Kalau langkah terbaik sudah stabil beberapa iterasi,
+      // berhenti lebih awal (langkah "jelas" nggak perlu dipikir lama — bot
+      // terasa lebih sigap). Kalau skornya baru anjlok, kasih waktu lebih.
+      if (depth > 1) {
+        let soft = 0.55 - 0.05 * Math.min(stable, 5);
+        if (scoreDrop > 30) soft = 0.7;
+        // jatah bisa berupa waktu ATAU jumlah node (level Elo pakai node,
+        // biar kekuatannya sama di HP lambat maupun server kencang)
+        const used = Math.max((Date.now() - t0) / budgetMs,
+          this.nodeLimit !== Infinity ? this.nodes / this.nodeLimit : 0);
+        if (used > soft) break;
+      }
 
       let alpha = -INF, beta = INF, delta = 28;
       if (depth >= 5 && Math.abs(bestScore) < MATE_IN_MAX) {
@@ -551,6 +640,9 @@ class Searcher {
       // (perkiraan terbaik sebelumnya) sudah selesai dihitung
       if (this.stopped && !iter.firstDone) break;
 
+      stable = (iter.bestMove === bestMove) ? stable + 1 : 0;
+      scoreDrop = prevIterScore === null ? 0 : prevIterScore - iter.bestScore;
+      prevIterScore = iter.bestScore;
       bestMove = iter.bestMove; bestScore = iter.bestScore;
       for (let i = 0; i < order.length; i++) {
         if (iter.scores[i] !== -INF) scores[i] = iter.scores[i];
@@ -575,17 +667,25 @@ class Searcher {
     }
 
     // ---- tahap 2: nilai langkah akar lainnya buat badge kualitas ----
+    const exact = new Uint8Array(order.length);
     if (gradeAll && order.length > 1) {
       // Dibatasi 400ms: dengan TT yang sudah panas dari pencarian utama, segini
       // lebih dari cukup. Tanpa plafon ini, level Elo tinggi (jatah 2-3 detik)
       // kena tambahan 30% waktu cuma buat angka badge.
       const gradeMs = opts.gradeBudgetMs != null ? opts.gradeBudgetMs
         : Math.min(400, Math.max(40, Math.round(budgetMs * 0.30)));
-      this.gradeRootMoves(pos, order, scores, bestMove, bestScore, completedDepth, classMargin, gradeMs);
+      // jatah node tersendiri buat penilaian (kalau pencarian utamanya dibatasi node)
+      const gradeNodes = opts.gradeNodes != null ? opts.gradeNodes
+        : (this.nodeLimit !== Infinity ? this.nodeLimit : Infinity);
+      this.nodeLimit = gradeNodes === Infinity ? Infinity : this.nodes + gradeNodes;
+      this.gradeRootMoves(pos, order, scores, exact, bestMove, bestScore, completedDepth, classMargin, gradeMs);
     }
 
+    // exact = skor langkah itu benar-benar dinilai (langkah terbaik selalu)
     const rootMoves = [];
-    for (let i = 0; i < order.length; i++) rootMoves.push({ move: order[i], score: scores[i] });
+    for (let i = 0; i < order.length; i++) {
+      rootMoves.push({ move: order[i], score: scores[i], exact: exact[i] === 1 || order[i] === bestMove });
+    }
     rootMoves.sort((a, b) => b.score - a.score);
     const j = rootMoves.findIndex(r => r.move === bestMove);
     if (j > 0) { const [r] = rootMoves.splice(j, 1); rootMoves.unshift(r); }
@@ -606,6 +706,13 @@ class Searcher {
     };
   }
 
+  rootMake(pos, m) {
+    this.stackPiece[0] = pos.board[MFROM(m)];
+    this.stackTo[0] = MTO(m);
+    this.chk[1] = -1;
+    pos.makeMove(m);
+  }
+
   // Satu iterasi penuh di akar, pakai PVS: langkah pertama jendela penuh,
   // sisanya null-window dulu dan baru di-search ulang kalau ternyata menjanjikan.
   rootIteration(pos, order, depth, alpha, beta) {
@@ -613,7 +720,7 @@ class Searcher {
     let bestScore = -INF, bestMove = order[0], firstDone = false;
     for (let i = 0; i < order.length; i++) {
       const m = order[i];
-      pos.makeMove(m);
+      this.rootMake(pos, m);
       let s;
       if (i === 0) {
         s = -this.negamax(pos, depth - 1, -beta, -alpha, 1, true, m, CHECK_EXT_BUDGET);
@@ -648,7 +755,7 @@ class Searcher {
   // di-search ulang biar dapat nilai eksak; yang jeblok cukup ditandai "jauh
   // lebih buruk" — toh badge-nya sama-sama blunder. Hemat waktu, dan karena TT
   // sudah panas dari pencarian utama, ini murah.
-  gradeRootMoves(pos, order, scores, bestMove, bestScore, mainDepth, margin, budgetMs) {
+  gradeRootMoves(pos, order, scores, exact, bestMove, bestScore, mainDepth, margin, budgetMs) {
     // PENTING: kedalamannya harus SAMA dengan pencarian utama. Kalau langkah
     // pembanding dinilai lebih dangkal, skornya jadi optimis dan "kerugian"
     // langkah kehilangan arti — badge-nya bakal ngaco.
@@ -659,21 +766,25 @@ class Searcher {
     this.stopped = false;
     for (let i = 0; i < order.length; i++) {
       const m = order[i];
-      if (m === bestMove) { scores[i] = bestScore; continue; }
-      if (this.stopped) { if (scores[i] === -INF || scores[i] > bestScore) scores[i] = floor; continue; }
-      pos.makeMove(m);
+      if (m === bestMove) { scores[i] = bestScore; exact[i] = 1; continue; }
+      // Belum sempat dinilai (jatah habis): jangan pakai batas-atas dari
+      // pencarian utama — angka itu sering nyaris sama dengan skor terbaik dan
+      // bikin langkah jelek kelihatan "sama bagus". Tandai nggak diketahui.
+      if (this.stopped) { scores[i] = floor; continue; }
+      this.rootMake(pos, m);
       let s = -this.negamax(pos, depth - 1, -lower - 1, -lower, 1, true, m, CHECK_EXT_BUDGET);
       if (s > lower && !this.stopped) {
         s = -this.negamax(pos, depth - 1, -INF, -lower, 1, true, m, CHECK_EXT_BUDGET);
       }
       pos.unmakeMove();
-      if (this.stopped) { if (scores[i] === -INF || scores[i] > bestScore) scores[i] = floor; continue; }
+      if (this.stopped) { scores[i] = floor; continue; }
       // langkah terbaik dihitung lebih dalam, jadi nggak boleh ada langkah lain
       // yang "kelihatan" lebih bagus cuma karena dinilai lebih dangkal
       scores[i] = s > bestScore ? bestScore : s;
+      exact[i] = 1; // dinilai tuntas (nilai eksak, atau pasti lebih buruk dari margin)
     }
     const bi = order.indexOf(bestMove);
-    if (bi >= 0) scores[bi] = bestScore;
+    if (bi >= 0) { scores[bi] = bestScore; exact[bi] = 1; }
   }
 
   ttProbeMove(pos) {

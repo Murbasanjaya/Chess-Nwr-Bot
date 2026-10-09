@@ -60,14 +60,16 @@ for (const [name, fen] of POSITIONS) {
   console.log(name.padEnd(18) + line.map(l => `${l.ms}ms: d${l.depth}/sel${l.seldepth} (${Math.round(l.nps / 1000)}k nps)`).join('  |  '));
 }
 
-console.log('\n--- level Elo ---');
+console.log('\n--- level Elo (jatah node, jadi kekuatannya sama di perangkat apa pun) ---');
 const engine = require('../engine/chessEngine.js');
-for (const elo of [400, 800, 1200, 1600, 2000, 2400, 2800, 3600, 5000]) {
+const info = engine.eloInfo();
+for (let elo = info.min; elo <= info.max; elo += Math.max(100, Math.round((info.max - info.min) / 8 / 50) * 50)) {
   const cfg = engine.eloConfig(elo);
   const t = Date.now();
-  const scored = engine.findBestMoves(START, cfg.maxDepth, cfg.budget, { classMargin: cfg.blunder > 0 ? 700 : 240 });
+  const { scored } = engine.botSearch(START, cfg, []);
   const dt = Date.now() - t;
-  console.log(`Elo ${String(elo).padStart(4)}: depth ${String(scored.info.depth).padStart(2)} (batas ${String(cfg.maxDepth).padStart(2)}), ${String(dt).padStart(4)}ms total, ${scored.info.nodes} node`);
+  console.log(`Elo ${String(cfg.elo).padStart(4)}: s=${cfg.s.toFixed(2)} batas ${String(cfg.nodes).padStart(6)} node, ` +
+    `derau ${String(cfg.noise).padStart(3)}cp -> depth ${String(scored.info.depth).padStart(2)}, ${String(dt).padStart(4)}ms`);
 }
 
 // Jaring pengaman regresi: kalau kecepatannya jatuh drastis, uji ini gagal.

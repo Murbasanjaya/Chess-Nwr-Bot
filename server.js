@@ -6,7 +6,7 @@ const express = require('express');
 const path = require('path');
 const engine = require('./engine/chessEngine.js');
 const {
-  Chess, findBestMoves, analyze, eloConfig, pickMove, classifyMove, gradePlayedMove,
+  Chess, analyze, eloConfig, eloInfo, botSearch, classifyMove, gradePlayedMove,
   detectOpening, bookMove, OPENINGS, MATE_THRESHOLD,
 } = engine;
 
@@ -47,7 +47,7 @@ app.post('/api/bot-move', (req, res) => {
     const game = new Chess(fen);
     if (game.game_over && game.game_over()) return res.status(400).json({ error: 'permainan sudah selesai' });
 
-    const eloNum = Math.max(400, Math.min(5000, parseInt(elo, 10) || 1200));
+    const eloNum = parseInt(elo, 10) || 1200; // dijepit ke rentang terkalibrasi di eloConfig
     const opening = detectOpening(history);
 
     // 1) coba buku pembukaan dulu
@@ -68,16 +68,9 @@ app.post('/api/bot-move', (req, res) => {
 
     // 2) kalau tidak ada di buku (atau sudah lewat), hitung sendiri
     const cfg = eloConfig(eloNum);
-    const scored = findBestMoves(fen, cfg.maxDepth, cfg.budget, {
-      sanHistory: history,
-      // Level bawah butuh skor semua langkah dengan resolusi lebar (biar
-      // "kesalahan manusiawi"-nya bisa dipilih dengan terukur) — dan itu murah
-      // karena kedalamannya kecil. Level atas cuma butuh cukup buat badge.
-      classMargin: cfg.blunder > 0 ? 700 : 240,
-    });
+    const { scored, idx: chosenIdx } = botSearch(fen, cfg, history);
     if (!scored || scored.length === 0) return res.status(400).json({ error: 'tidak ada langkah legal' });
 
-    const chosenIdx = pickMove(scored, cfg);
     const chosen = scored[chosenIdx].m;
     const plyNumber = history.length + 1;
     const tag = classifyMove(scored, chosenIdx, plyNumber, fen);
@@ -97,6 +90,7 @@ app.post('/api/bot-move', (req, res) => {
         scoreText: scoreText(scored[chosenIdx].s, info.mate),
         mate: info.mate,
         level: cfg.tag,
+        elo: cfg.elo,
         forcedMate: scored[0].s >= MATE_THRESHOLD,
       },
     });
@@ -191,6 +185,10 @@ app.post('/api/analyze', (req, res) => {
     res.status(500).json({ error: 'internal error', detail: String(err && err.message || err) });
   }
 });
+
+// ---------- GET /api/levels ----------
+// Rentang Elo yang benar-benar terkalibrasi (dipakai slider di UI).
+app.get('/api/levels', (req, res) => res.json(eloInfo()));
 
 // ---------- GET /api/openings ----------
 // query: ?q=ruy lopez  (opsional, filter nama/eco)
